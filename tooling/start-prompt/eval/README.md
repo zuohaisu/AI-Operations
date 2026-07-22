@@ -9,7 +9,7 @@ scores, conservative per-model statistics, and hash-verified frozen snapshots.
 - `config.yaml` — models, three arms, profiles, decoding, and judge configuration
 - `prompts/v4.md` — current Start Prompt
 - `prompts/v5.md` — generated, self-contained V5 distribution build
-- `build_v5.py` — deterministically rebuild/check the single-file V5 from top-level
+- `build_v5.py` — deterministically rebuild/check the single-file V5 from sibling
   `core/` and `modules/`
 - `run.py` — target-model generation phase; never judges
 - `judge.py` — condition/model-blind scoring phase
@@ -22,8 +22,13 @@ scores, conservative per-model statistics, and hash-verified frozen snapshots.
 Python 3.9+ and PyYAML are required. The HTTP clients use the standard library, so
 provider SDKs are not required.
 
+> The eval package now lives at `tooling/start-prompt/eval`. All commands below assume
+> you have `cd`'d into `tooling/start-prompt` (the parent of `eval/`), so that `eval/...`
+> paths resolve correctly. `build_v5.py` reads `core/` and `modules/` as siblings of
+> `eval/`, which is why `core/`, `modules/`, `platform/`, and `eval/` move together.
+
 ```bash
-cd /Users/hzuo/Documents/code/AI-Operations
+cd /Users/hzuo/Documents/code/AI-Operations/tooling/start-prompt
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r eval/requirements.txt
