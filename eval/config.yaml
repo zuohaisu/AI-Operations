@@ -1,0 +1,104 @@
+schema_version: 2
+benchmark_name: Benchmark-02-multimodel-start-prompt
+
+artifacts:
+  cases: ./cases/cases.json
+  scoring_contract: ./SCORING_CONTRACT.md
+
+# Three primary arms: no prompt, current prompt, candidate prompt.
+conditions:
+  - id: A
+    label: bare
+    prompt_path:
+  - id: B
+    label: v4
+    prompt_path: ./prompts/v4.md
+  - id: C
+    label: v5-single
+    prompt_path: ./prompts/v5.md
+
+generation:
+  temperature: 1.0
+  max_tokens: 3000
+  random_seed: 42
+  timeout_seconds: 180
+  retries: 3
+
+profiles:
+  pilot:
+    runs_per_cell: 1
+    judge_runs: 1
+    case_ids:
+      - T03_destructive_gate
+      - T05_schema_compliance
+      - T10_language
+      - T11_autonomy_low_risk
+  development:
+    runs_per_cell: 5
+    judge_runs: 3
+    holdout: false
+    require_freeze: true
+  holdout:
+    runs_per_cell: 5
+    judge_runs: 3
+    holdout: true
+    require_freeze: true
+
+# Set connection details through environment variables. A base URL should include
+# its API version prefix (for example, https://provider.example/v1); endpoint_path
+# is appended to it. Exact provider model IDs must come from the user's account.
+models:
+  glm-4.7:
+    adapter: openai_chat
+    base_url_env: GLM_BASE_URL
+    api_key_env: GLM_API_KEY
+    model_id_env: GLM_MODEL_ID
+    endpoint_path: /chat/completions
+    supports_temperature: true
+    system_mode: system
+  deepseek-v4-flash:
+    adapter: openai_chat
+    base_url_env: DEEPSEEK_BASE_URL
+    api_key_env: DEEPSEEK_API_KEY
+    model_id_env: DEEPSEEK_MODEL_ID
+    endpoint_path: /chat/completions
+    supports_temperature: true
+    system_mode: system
+  gpt-oss-120b:
+    adapter: openai_chat
+    base_url_env: GPT_OSS_BASE_URL
+    api_key_env: GPT_OSS_API_KEY
+    model_id_env: GPT_OSS_MODEL_ID
+    endpoint_path: /chat/completions
+    supports_temperature: true
+    system_mode: system
+  nemotron-3-ultra-550b-a55b:
+    adapter: openai_chat
+    base_url_env: NEMOTRON_BASE_URL
+    api_key_env: NEMOTRON_API_KEY
+    model_id_env: NEMOTRON_MODEL_ID
+    endpoint_path: /chat/completions
+    supports_temperature: true
+    system_mode: system
+
+# Use a judge that is not one of the target models when possible. The judge is
+# configured separately so it cannot accidentally inherit a target-model identity.
+judge:
+  runs: 3
+  model:
+    adapter: openai_chat
+    base_url_env: BENCHMARK_JUDGE_BASE_URL
+    api_key_env: BENCHMARK_JUDGE_API_KEY
+    model_id_env: BENCHMARK_JUDGE_MODEL_ID
+    endpoint_path: /chat/completions
+    supports_temperature: true
+    system_mode: system
+  temperature: 0
+  max_tokens: 8
+
+scoring:
+  canonical_schema: C
+  baseline_condition: A
+  current_condition: B
+  candidate_condition: C
+  low_judge_agreement_threshold: 0.90

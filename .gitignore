@@ -1,0 +1,36 @@
+# OS junk
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor / IDE
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+
+# Logs
+*.log
+
+# Local temp / scratch
+tmp/
+scratch/
+*.bak
