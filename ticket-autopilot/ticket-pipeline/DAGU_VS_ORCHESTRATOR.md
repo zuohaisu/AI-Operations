@@ -59,8 +59,8 @@ Result: Waiting
 
 所以真正「开源一个都没覆盖」的只有一块：
 
-1. **verify 驳回 → 回到 execute 的循环**：这是「agent 自控闭环」的本质。Dagu 是「跑完即止」的调度器，没有「根据某步输出决定回退到上游重跑」的原生语义（它的 retry 是「步骤失败重试」，不是「根据语义决策回退」）。我们的 orchestrator / VFF 这 30 行正是价值所在。
-2. ~~Plane 工单触发~~ → 降级为「工单源适配层」（见 §2 该行）：引擎只消费一个 `ticket_id`，触发由持有工单的系统提供。VFF 当前把 Plane 绑定局部化在 `close_ticket` handler + 一个未来的 trigger 适配，引擎本身与工单系统无关。
+1. **verify 驳回 → 回到 execute 的循环**：这是「agent 自控闭环」的本质。Dagu 是「跑完即止」的调度器，没有「根据某步输出决定回退到上游重跑」的原生语义（它的 retry 是「步骤失败重试」，不是「根据语义决策回退」）。我们的 orchestrator / Ticket Autopilot 这 30 行正是价值所在。
+2. ~~Plane 工单触发~~ → 降级为「工单源适配层」（见 §2 该行）：引擎只消费一个 `ticket_id`，触发由持有工单的系统提供。Ticket Autopilot 当前把 Plane 绑定局部化在 `close_ticket` handler + 一个未来的 trigger 适配，引擎本身与工单系统无关。
 
 换句话说：**引擎层 Dagu 比我们写得好，且「触发」对它并非短板（那是工单系统的事）；唯独「控制闭环」这块薄逻辑 Dagu 接管不了，还是得我们自己写。** 用 Dagu 只需在「Dagu 编排」与「我们的闭环步骤」之间缝一层，触发本身不用搬。
 
@@ -91,4 +91,4 @@ Result: Waiting
 ---
 
 ## 5. 最终一句话
-**Dagu 证明了「通用引擎」这层开源已经解决；我们这条流水线的护城河其实只有一块——verify 闭环（「Plane 触发」是工单源适配层，引擎无关，换 Multica 就由它原生触发）。所以先不换引擎，保持薄 orchestrator/VFF；等规模/可视化/人审需求上来，再把 Dagu 当外壳包上来。**
+**Dagu 证明了「通用引擎」这层开源已经解决；我们这条流水线的护城河其实只有一块——verify 闭环（「Plane 触发」是工单源适配层，引擎无关，换 Multica 就由它原生触发）。所以先不换引擎，保持薄 orchestrator/Ticket Autopilot；等规模/可视化/人审需求上来，再把 Dagu 当外壳包上来。**

@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ticket-autopilot"
+version = "0.1.0"
+description = "Lightweight local controller that turns a structured ticket into a verified, independently QA'd GitHub PR."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+ticket-controller = "ticket_autopilot.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -34,3 +34,12 @@ build/
 tmp/
 scratch/
 *.bak
+
+# Ticket Autopilot runtime artifacts (spec §12.4)
+.ticket-autopilot/
+runs/
+worktrees/
+
+# Secrets / credentials (never commit)
+.env
+*.local

@@ -1,19 +1,18 @@
-# Vivarium Forge Flow (VFF)
+# Ticket Autopilot
 
-> Team: **VivariumForge**
-> A tiny, agent-native workflow engine. Declarative YAML in → a runnable
-> state machine that drives your agents (LLM / CLI / script) through a
-> Plan → Execute → Verify → Close loop, with a native **verify-reject →
+> A tiny, agent-native workflow engine for **ticket-driven automated software delivery**.
+> Declarative YAML in → a runnable state machine that drives your agents (LLM / CLI / script)
+> through a Plan → Execute → Verify → Close loop, with a native **verify-reject →
 > re-execute retry loop** and **strict CLI guardrails**.
 
-`vff` is the short name for the product, the CLI, and the Python package.
+`vff` is the internal package / CLI name (historic; migration to `ticket_autopilot` pending).
 
 ---
 
 ## Why this exists
 
-We already have `tooling/ticket-pipeline/orchestrator.py` doing this for one
-hard-coded pipeline. VFF generalizes that pattern: the same engine runs any
+We already have `ticket-pipeline/orchestrator.py` doing this for one
+hard-coded pipeline. Ticket Autopilot generalizes that pattern: the same engine runs any
 workflow you describe in YAML. The two things that made our pipeline special —
 the **verify→reject→execute loop** and the **strict execution sandbox** — are
 first-class here, not afterthoughts.
@@ -21,22 +20,27 @@ first-class here, not afterthoughts.
 ## Layout
 
 ```
-vivarium-forge-flow/
-├── vff/
+vivarium-forge-flow/           (or: ticket-autopilot/)
+├── ticket-pipeline/            # reference implementation + Plane client
+│   ├── orchestrator.py
+│   ├── plane_client.py
+│   ├── dagu-poc/
+│   └── DAGU_VS_ORCHESTRATOR.md
+├── vff/                        # engine core (package)
 │   ├── __init__.py
-│   ├── __main__.py        # `python -m vff`
-│   ├── engine.py          # DAG + retry-loop interpreter (the brain)
-│   ├── drivers.py         # llm / cli / hermes / script executors (+ guardrails)
-│   ├── store.py           # run snapshots (runs/*.json)
-│   ├── cli.py             # run / runs commands
+│   ├── __main__.py             # `python -m vff`
+│   ├── engine.py               # DAG + retry-loop interpreter (the brain)
+│   ├── drivers.py              # llm / cli / hermes / script executors (+ guardrails)
+│   ├── store.py                # run snapshots (runs/*.json)
+│   ├── cli.py                  # run / runs commands
 │   └── handlers/
-│       └── close_ticket.py # the only node that touches Plane (reuses plane_client)
+│       └── close_ticket.py     # the only node that touches Plane (reuses plane_client)
 ├── workflows/
 │   ├── ticket-pipeline.yaml          # reference: llm/cli/script drivers
 │   └── ticket-pipeline-hermes.yaml   # Hermes-as-driver variant
-├── tests/test_engine.py   # unittest: loop + guardrails
-├── runs/                  # snapshots (gitignored)
-└── sandbox/               # strict cwd for the cli executor (gitignored)
+├── tests/test_engine.py       # unittest: loop + guardrails
+├── runs/                      # snapshots (gitignored)
+└── sandbox/                   # strict cwd for the cli executor (gitignored)
 ```
 
 ## Run it
@@ -153,7 +157,7 @@ To relax later (user: "you open it up afterwards"), widen `tools`, set
 ## Hermes as the execution backend (compose, don't rewrite)
 
 Instead of a bare LLM or the `claude` CLI, a node can run as a **full Hermes
-sub-agent** by setting `driver: hermes`. VFF keeps owning the *control flow*
+sub-agent** by setting `driver: hermes`. Ticket Autopilot keeps owning the *control flow*
 (deterministic loop, `max_retries` cap, snapshot, strict guardrails); Hermes
 owns *execution* — its tools, skills, and `delegate_task` sub-agents. See
 `workflows/ticket-pipeline-hermes.yaml` (same loop, three reasoning nodes use
@@ -179,9 +183,9 @@ PYTHONPATH=. python -m vff run workflows/ticket-pipeline-hermes.yaml \
 - Auth header is `Authorization: Bearer $HERMES_API_KEY`; adjust in
   `drivers.hermes_call` if your gateway expects a different scheme.
 
-See `tooling/ticket-pipeline/DAGU_VS_ORCHESTRATOR.md` and the project memory
-note on *VFF engine + Hermes-as-driver* for the rationale (Hermes gives
-sub-agent orchestration + triggers; VFF gives the deterministic closed loop
+See `ticket-pipeline/DAGU_VS_ORCHESTRATOR.md` and the project memory
+note on *Ticket Autopilot engine + Hermes-as-driver* for the rationale (Hermes gives
+sub-agent orchestration + triggers; Ticket Autopilot gives the deterministic closed loop
 neither off-the-shelf engine provides).
 
 ## Retry / QA policy
@@ -213,4 +217,4 @@ accept) and the CLI cwd guardrail.
   Issues later); the engine only consumes a `ticket_id`, so swapping the
   ticket source never touches the engine. The Plane binding is localized to
   `close_ticket` (and a future trigger adapter), not baked into the core.
-  Cf. the Dagu comparison in `tooling/ticket-pipeline/DAGU_VS_ORCHESTRATOR.md`.
+  Cf. the Dagu comparison in `ticket-pipeline/DAGU_VS_ORCHESTRATOR.md`.
