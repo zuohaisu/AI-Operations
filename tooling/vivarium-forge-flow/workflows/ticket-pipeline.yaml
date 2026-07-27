@@ -1,0 +1,109 @@
+# Vivarium Forge Flow — workflow spec (minimal schema v1)
+#
+# Top-level keys:
+#   version   schema version
+#   name      workflow id (used for snapshots)
+#   vars      reusable constants (referenced via ${vars.x})
+#   agents    agent/persona registry: name -> {driver, system, ...}
+#   params    declared inputs (type/description); passed at run time
+#   nodes     steps: id, agent, inputs (${...} templating), capture (output key)
+#   edges     from/to; default kind=forward (defines `needs`); kind=loop for
+#             retry back-edges (carries `when` + `max_retries`)
+#   mock      per-agent canned outputs, used with `vff run --mock` (no keys)
+#
+# Edge `when` is a Python expression over ctx:
+#   nodes.<id>            -> a node's captured output (dict -> attribute access)
+#   params / vars / retry -> run params / workflow vars / per-edge retry count
+
+version: "1.0"
+name: ticket-pipeline
+
+vars:
+  max_retries: 5          # QA retry cap. User: real manual max seen = 7;
+                          # use 5; usually passes in 1-2 retries.
+
+agents:
+  planner:
+    driver: llm
+    system: |
+      You are the Planner. Read the ticket and write a concise implementation
+      plan (what to change, which files, how to verify).
+
+  executor:
+    driver: cli
+    command: claude
+    cwd: ./sandbox                 # strict: designated directory
+    permission_mode: read-only     # strict: read-only
+    tools:                         # allowlist (no write tools)
+      - Read
+      - Glob
+      - Grep
+    system: |
+      You are the Executor. Implement the plan using only the allowed tools.
+
+  verifier:
+    driver: llm
+    expect: json
+    system: |
+      You are the Verifier. Compare the plan against the execution result.
+      Reply with ONLY a JSON object: {"decision":"accept"|"reject","reason":"..."}
+
+  closer:
+    driver: script
+    entry: close_ticket            # handlers/close_ticket.py::close_ticket
+
+params:
+  ticket_id:
+    type: string
+    description: Plane ticket UUID to process
+
+nodes:
+  - id: plan
+    agent: planner
+    capture: plan
+    inputs:
+      ticket_id: ${params.ticket_id}
+
+  - id: execute
+    agent: executor
+    capture: result
+    inputs:
+      plan: ${nodes.plan}
+
+  - id: verify
+    agent: verifier
+    capture: verdict
+    inputs:
+      plan: ${nodes.plan}
+      result: ${nodes.execute}
+
+  - id: close
+    agent: closer
+    capture: done
+    inputs:
+      ticket_id: ${params.ticket_id}
+      plan: ${nodes.plan}
+      result: ${nodes.execute}
+
+edges:
+  - from: plan
+    to: execute
+  - from: execute
+    to: verify
+  - from: verify
+    to: execute
+    kind: loop
+    when: "nodes.verify.decision == 'reject'"
+    max_retries: ${vars.max_retries}
+  - from: verify
+    to: close
+    when: "nodes.verify.decision == 'accept'"
+
+# Headless self-test values (used with --mock; no LLM/CLI/Plane calls).
+# verifier rejects twice, then accepts -> exercises the loop exactly.
+mock:
+  planner:  {returns: "Mock plan for ${params.ticket_id}"}
+  executor: {returns: "Mock implementation of the plan."}
+  verifier: {reject_times: 2, reject_reason: "needs more tests",
+             accept_reason: "plan satisfied"}
+  closer:   {returns: {closed: true}}

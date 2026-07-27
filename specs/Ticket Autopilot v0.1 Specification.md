@@ -1,9 +1,18 @@
 # Ticket Autopilot v0.1 Specification
 
 **Version:** 0.1
-**Status:** Approved for implementation
+**Status:** Approved as a fallback design; implementation pending reuse-first capability audit
 **Date:** 2026-07-20
 **Primary objective:** 验证单个软件开发 Ticket 的 `Development → QA → Fix → QA` 自动闭环质量。
+
+---
+
+> **2026-07-22 alignment gate:** This specification describes a local Python
+> Controller, but it is not authorization to rebuild capabilities already available
+> through Linear or Plane automation, agent hooks, MCP, GitHub Actions, or native
+> GitHub integrations. Before implementation, inventory those capabilities and record
+> the remaining gaps. Use this Controller only for the smallest set of gaps that cannot
+> be closed by configuration or thin deterministic glue. See `IDEA.md`.
 
 ---
 

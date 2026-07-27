@@ -1,0 +1,9 @@
+# run snapshots (audit artifacts, not source)
+runs/*.json
+
+# sandbox for the cli executor (strict cwd)
+sandbox/*
+!sandbox/.gitkeep
+
+# local env
+.env
