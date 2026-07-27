@@ -9,16 +9,24 @@ Conceptually **Ticket Autopilot** — a lightweight local controller that turns 
 - URL: https://app.plane.so/hspace/projects/d40168f5-5d44-4810-a39e-3b6558e9bf6e/
 - The Plane MCP **cannot create projects** — use the REST API. Full how-to + gotchas are in the daily log (2026-07-27.md). Key ones: create cycle needs `project_id` in body; work-item create ignores `state_id`/`label_ids`/`cycle_id` (set via PATCH with `state`/`labels`, and cycle via `POST /cycles/{cid}/cycle-issues/` `{"issues":[id]}`).
 
-## Directory structure (scaffolded 2026-07-27, restructured Option B same day)
-- `src/ticket_autopilot/` — tool package: `cli.py` (argparse stub), `controller.py`/`config.py`/`models.py` (TBD), `adapters/` (linear/github/git/claude/codex), `services/` (validators/managers), `schemas/` (ticket-spec + qa-verdict JSON Schemas).
-- `tests/` — unit / integration / fixtures.
-- `tooling/vivarium-forge-flow/` — **the engine**; `ticket-pipeline/` is now a SUBDIRECTORY inside it (Option B: ticket-pipeline is part of Ticket Autopilot, not a peer). `close_ticket.py` imports `ticket-pipeline/plane_client.py` via relative `../../ticket-pipeline` — still resolves correctly after the move, zero code change. Internal package name `vff/` and dir name `vivarium-forge-flow/` kept for now (code-level rename pending user request).
-- Kept untouched: `specs/`, `research/`, `tooling/start-prompt/` (parked), `tooling/codex-notification-setup/` (parked), `logs/`, `tasks/` (Chinese task list), `AGENTS.md`, `IDEA.md`.
-- `pyproject.toml` (src-layout, console script `ticket-controller`), `.gitignore` extended (`.ticket-autopilot/`, `runs/`, `worktrees/`, `.env`).
+## Directory structure (finalized 2026-07-28)
+- `src/ticket_autopilot/` — **the product package (Ticket Autopilot)**.
+  - `engine/` — **Engine** (orchestration core; importable as `ticket_autopilot.engine`): `engine.py` (DAG + retry-loop interpreter), `drivers.py` (llm/cli/hermes/script executors + guardrails), `store.py` (run snapshots), `cli.py` (`python -m ticket_autopilot.engine`), `handlers/close_ticket.py` (only node touching Plane; reuses `reference/ticket-pipeline/plane_client.py`).
+  - `connectors/` — **Connector layer** (glue to Linear/Plane/GitHub/Codex). Renamed from `adapters/` 2026-07-28 (user picked "Connector" over "Handler": Handler collides with engine's internal `handlers/` and is too granular).
+  - `cli.py` / `schemas/` / `services/` — product CLI (`ticket-controller` entry = `ticket_autopilot.cli:main`), ticket-spec + qa-verdict JSON Schemas, validators/managers (scaffold).
+  - `reference/ticket-pipeline/` — predecessor PoC (orchestrator.py, plane_client.py, dagu-poc/); reached by `close_ticket.py` via relative `../../reference/ticket-pipeline`.
+  - `workflows/` — YAML defs (`ticket-pipeline.yaml`, `ticket-pipeline-hermes.yaml`).
+  - `runs/` + `sandbox/` — runtime artifacts (gitignored; `sandbox/*` keep `.gitkeep`).
+- `tooling/start-prompt/` — **parked** prompt-source + eval (`core/` `modules/` `platform/` `eval/`; `eval/build_v5.py` reads `core`/`modules` as siblings of `eval`).
+- `tooling/codex-notification-setup/` — parked codex infra config.
+- `specs/` `research/` `logs/` `tasks/` `tests/` — spec doc, research notes, goal-drift log, Chinese task list, top-level product tests.
+- `pyproject.toml` (src-layout, console `ticket-controller` = `ticket_autopilot.cli:main`), `.gitignore` (`.ticket-autopilot/`, `runs/`, `worktrees/`, `sandbox/*`, `.env`).
 
-## Future plan: open-source Ticket Autopilot as its own GitHub repo
-- When open-sourced later, re-publish `tooling/vivarium-forge-flow/` (the engine + ticket-pipeline) as a standalone **Ticket Autopilot** GitHub repo, separate from this `AI-Operations` meta-repo.
-- Implication for now: keep `vivarium-forge-flow/` self-contained (its own `README`, tests, `.gitignore`) so it can be lifted out cleanly later.
+## Naming convention (locked 2026-07-28)
+- **Product** = "Ticket Autopilot"; **Engine** = the orchestration core (`src/ticket_autopilot/engine/`); **Connector** = the glue layer (`src/ticket_autopilot/connectors/`, ex-`adapters/`). Legacy "Vivarium Forge Flow" / `vff` / `forge_flow` naming fully removed from code+docs on 2026-07-28.
+
+## Future plan: open-source Ticket Autopilot
+- Product lives in `src/ticket_autopilot/`; to open-source later, publish that package (Engine + Connector + reference) as a standalone GitHub repo, separate from this `AI-Operations` meta-repo.
 
 ## Conventions / preferences
 - Reply in Chinese for this user; git write ops need explicit approval.

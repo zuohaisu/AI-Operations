@@ -43,3 +43,7 @@ worktrees/
 # Secrets / credentials (never commit)
 .env
 *.local
+
+# Engine sandbox (strict cwd for the cli executor) — keep .gitkeep
+sandbox/*
+!sandbox/.gitkeep

@@ -5,13 +5,13 @@
 > through a Plan → Execute → Verify → Close loop, with a native **verify-reject →
 > re-execute retry loop** and **strict CLI guardrails**.
 
-`vff` is the internal package / CLI name (historic; migration to `ticket_autopilot` pending).
+The Engine package is `ticket_autopilot.engine` (it lives inside the Ticket Autopilot product package).
 
 ---
 
 ## Why this exists
 
-We already have `ticket-pipeline/orchestrator.py` doing this for one
+We already have `reference/ticket-pipeline/orchestrator.py` doing this for one
 hard-coded pipeline. Ticket Autopilot generalizes that pattern: the same engine runs any
 workflow you describe in YAML. The two things that made our pipeline special —
 the **verify→reject→execute loop** and the **strict execution sandbox** — are
@@ -20,15 +20,16 @@ first-class here, not afterthoughts.
 ## Layout
 
 ```
-vivarium-forge-flow/           (or: ticket-autopilot/)
-├── ticket-pipeline/            # reference implementation + Plane client
-│   ├── orchestrator.py
-│   ├── plane_client.py
-│   ├── dagu-poc/
-│   └── DAGU_VS_ORCHESTRATOR.md
-├── vff/                        # engine core (package)
+src/ticket_autopilot/
+├── reference/
+│   └── ticket-pipeline/        # reference implementation + Plane client
+│       ├── orchestrator.py
+│       ├── plane_client.py
+│       ├── dagu-poc/
+│       └── DAGU_VS_ORCHESTRATOR.md
+├── engine/                    # engine core (package: ticket_autopilot.engine)
 │   ├── __init__.py
-│   ├── __main__.py             # `python -m vff`
+│   ├── __main__.py             # `python -m ticket_autopilot.engine`
 │   ├── engine.py               # DAG + retry-loop interpreter (the brain)
 │   ├── drivers.py              # llm / cli / hermes / script executors (+ guardrails)
 │   ├── store.py                # run snapshots (runs/*.json)
@@ -38,7 +39,7 @@ vivarium-forge-flow/           (or: ticket-autopilot/)
 ├── workflows/
 │   ├── ticket-pipeline.yaml          # reference: llm/cli/script drivers
 │   └── ticket-pipeline-hermes.yaml   # Hermes-as-driver variant
-├── tests/test_engine.py       # unittest: loop + guardrails
+├── engine/tests/test_engine.py    # unittest: loop + guardrails
 ├── runs/                      # snapshots (gitignored)
 └── sandbox/                   # strict cwd for the cli executor (gitignored)
 ```
@@ -48,7 +49,7 @@ vivarium-forge-flow/           (or: ticket-autopilot/)
 Headless self-test (no LLM/CLI/Plane keys needed — uses `mock` drivers):
 
 ```bash
-PYTHONPATH=. python -m vff run workflows/ticket-pipeline.yaml \
+PYTHONPATH=src python -m ticket_autopilot.engine run workflows/ticket-pipeline.yaml \
     --mock --params '{"ticket_id":"DEMO-1"}'
 ```
 
@@ -59,11 +60,11 @@ on PATH for the executor; the closer writes to Plane via `plane_client`):
 export XY_LLM_BASE_URL=...   # e.g. https://api.deepseek.com
 export XY_LLM_API_KEY=...
 export XY_LLM_MODEL=...      # e.g. deepseek-chat
-PYTHONPATH=. python -m vff run workflows/ticket-pipeline.yaml \
+PYTHONPATH=src python -m ticket_autopilot.engine run workflows/ticket-pipeline.yaml \
     --params '{"ticket_id":"<real-plane-uuid>"}'
 ```
 
-List snapshots: `PYTHONPATH=. python -m vff runs`
+List snapshots: `PYTHONPATH=src python -m ticket_autopilot.engine runs`
 
 ## Minimal YAML schema
 
@@ -170,7 +171,7 @@ gateway's OpenAI-compatible API** (aiohttp, default `http://localhost:8642/v1`):
 export HERMES_API_URL=http://localhost:8642/v1   # default if unset
 export HERMES_API_KEY=...                        # optional (gateway may require it)
 export HERMES_MODEL=hermes-agent                 # default if unset
-PYTHONPATH=. python -m vff run workflows/ticket-pipeline-hermes.yaml \
+PYTHONPATH=src python -m ticket_autopilot.engine run workflows/ticket-pipeline-hermes.yaml \
     --params '{"ticket_id":"<real-plane-uuid>"}'
 ```
 
@@ -183,7 +184,7 @@ PYTHONPATH=. python -m vff run workflows/ticket-pipeline-hermes.yaml \
 - Auth header is `Authorization: Bearer $HERMES_API_KEY`; adjust in
   `drivers.hermes_call` if your gateway expects a different scheme.
 
-See `ticket-pipeline/DAGU_VS_ORCHESTRATOR.md` and the project memory
+See `reference/ticket-pipeline/DAGU_VS_ORCHESTRATOR.md` and the project memory
 note on *Ticket Autopilot engine + Hermes-as-driver* for the rationale (Hermes gives
 sub-agent orchestration + triggers; Ticket Autopilot gives the deterministic closed loop
 neither off-the-shelf engine provides).
@@ -197,7 +198,7 @@ edge fires until `accept` or the cap is hit.
 ## Tests
 
 ```bash
-PYTHONPATH=. python -m unittest tests.test_engine -v
+PYTHONPATH=src python -m unittest ticket_autopilot.engine.tests.test_engine -v
 ```
 
 Covers: the retry loop (verifier rejects twice → 3 executes, close only on
@@ -217,4 +218,4 @@ accept) and the CLI cwd guardrail.
   Issues later); the engine only consumes a `ticket_id`, so swapping the
   ticket source never touches the engine. The Plane binding is localized to
   `close_ticket` (and a future trigger adapter), not baked into the core.
-  Cf. the Dagu comparison in `ticket-pipeline/DAGU_VS_ORCHESTRATOR.md`.
+  Cf. the Dagu comparison in `reference/ticket-pipeline/DAGU_VS_ORCHESTRATOR.md`.

@@ -21,7 +21,7 @@ GLM / Kimi 任选其一）作 Agent 运行时 + **Plane REST API 直连**绕过 
 ## 配置（一次性）
 
 ```bash
-cd tooling/vivarium-forge-flow/ticket-pipeline
+cd src/ticket_autopilot/reference/ticket-pipeline
 cp .env.example .env
 # 编辑 .env，三选一，例如 DeepSeek：
 #   XY_LLM_BASE_URL=https://api.deepseek.com/v1
@@ -36,7 +36,7 @@ orchestrator 会在 BASE_URL 后自动拼 `/chat/completions`，零依赖（纯 
 ## 运行
 
 ```bash
-cd tooling/vivarium-forge-flow/ticket-pipeline
+cd src/ticket_autopilot/reference/ticket-pipeline
 PY=/Users/hzuo/.workbuddy/binaries/python/versions/3.13.12/bin/python3
 
 # B) 验证 Plane 直连可用（无副作用，用完删测试 ticket）

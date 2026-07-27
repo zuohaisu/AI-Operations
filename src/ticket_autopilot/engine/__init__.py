@@ -1,8 +1,6 @@
-"""Vivarium Forge Flow (VFF) — a tiny, agent-native workflow engine.
+"""Ticket Autopilot Engine — a tiny, agent-native workflow engine.
 
-Team: VivariumForge
-Product: Vivarium Forge Flow
-Short name / CLI / package: vff
+Part of the Ticket Autopilot product (package: ticket_autopilot.engine).
 
 The engine turns a declarative YAML workflow (nodes + edges, with a
 verify->reject->execute retry loop and human/agent gates) into a runnable

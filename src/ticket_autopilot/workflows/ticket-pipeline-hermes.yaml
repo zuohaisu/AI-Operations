@@ -1,22 +1,17 @@
-# Vivarium Forge Flow — workflow spec (minimal schema v1)
+# Ticket Autopilot Engine — "Hermes-as-driver" variant of ticket-pipeline.
 #
-# Top-level keys:
-#   version   schema version
-#   name      workflow id (used for snapshots)
-#   vars      reusable constants (referenced via ${vars.x})
-#   agents    agent/persona registry: name -> {driver, system, ...}
-#   params    declared inputs (type/description); passed at run time
-#   nodes     steps: id, agent, inputs (${...} templating), capture (output key)
-#   edges     from/to; default kind=forward (defines `needs`); kind=loop for
-#             retry back-edges (carries `when` + `max_retries`)
-#   mock      per-agent canned outputs, used with `vff run --mock` (no keys)
+# Same deterministic loop as ticket-pipeline.yaml (plan -> execute -> verify
+# -> [reject: re-run execute] / [accept: close]). The ONLY difference: the
+# three reasoning nodes run as *Hermes sub-agents* (driver: hermes) instead of
+# a bare LLM or the `claude` CLI. Ticket Autopilot Engine still owns the control flow, the retry
+# cap, the snapshot, and the strict guardrails; Hermes owns execution.
 #
-# Edge `when` is a Python expression over ctx:
-#   nodes.<id>            -> a node's captured output (dict -> attribute access)
-#   params / vars / retry -> run params / workflow vars / per-edge retry count
+# Real run needs a Hermes gateway listening at HERMES_API_URL
+# (default http://localhost:8642/v1) + HERMES_API_KEY (optional). Headless
+# self-test: `ticket_autopilot.engine run workflows/ticket-pipeline-hermes.yaml --mock`.
 
 version: "1.0"
-name: ticket-pipeline
+name: ticket-pipeline-hermes
 
 vars:
   max_retries: 5          # QA retry cap. User: real manual max seen = 7;
@@ -24,25 +19,20 @@ vars:
 
 agents:
   planner:
-    driver: llm
+    driver: hermes
     system: |
       You are the Planner. Read the ticket and write a concise implementation
-      plan (what to change, which files, how to verify).
+      plan (what to change, which files, how to verify). You may use your
+      tools and delegate research if needed.
 
   executor:
-    driver: cli
-    command: claude
-    cwd: ./sandbox                 # strict: designated directory
-    permission_mode: read-only     # strict: read-only
-    tools:                         # allowlist (no write tools)
-      - Read
-      - Glob
-      - Grep
+    driver: hermes
     system: |
-      You are the Executor. Implement the plan using only the allowed tools.
+      You are the Executor. Implement the plan. You operate inside a strict
+      sandbox (read-only, designated directory) enforced by the caller.
 
   verifier:
-    driver: llm
+    driver: hermes
     expect: json
     system: |
       You are the Verifier. Compare the plan against the execution result.
@@ -99,7 +89,7 @@ edges:
     to: close
     when: "nodes.verify.decision == 'accept'"
 
-# Headless self-test values (used with --mock; no LLM/CLI/Plane calls).
+# Headless self-test values (used with --mock; no gateway/Plane calls).
 # verifier rejects twice, then accepts -> exercises the loop exactly.
 mock:
   planner:  {returns: "Mock plan for ${params.ticket_id}"}

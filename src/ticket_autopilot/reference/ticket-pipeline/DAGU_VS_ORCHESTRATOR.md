@@ -1,7 +1,7 @@
 # Dagu PoC — 对比结论：Dagu vs 我们的 orchestrator
 
 > 日期：2026-07-27
-> 背景：我们在做「工单驱动的 multi-agent 自动化流水线」（Plane 工单 → Plan agent → Execute agent → Verify agent → 关闭工单），目标是「只管工单，执行/验收/关闭全自动」。本 PoC 用 Dagu 把同一套流水线写成 DAG，端到端实跑一张真实 Plane 测试票，对比我们自己写的 orchestrator（`tooling/ticket-pipeline/orchestrator.py`）。
+> 背景：我们在做「工单驱动的 multi-agent 自动化流水线」（Plane 工单 → Plan agent → Execute agent → Verify agent → 关闭工单），目标是「只管工单，执行/验收/关闭全自动」。本 PoC 用 Dagu 把同一套流水线写成 DAG，端到端实跑一张真实 Plane 测试票，对比我们自己写的 orchestrator（`orchestrator.py`）。
 
 ---
 

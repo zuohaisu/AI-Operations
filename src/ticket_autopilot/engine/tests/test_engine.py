@@ -1,4 +1,4 @@
-"""VFF engine + guardrail self-tests (stdlib unittest, no external deps).
+"""Ticket Autopilot Engine + guardrail self-tests (stdlib unittest, no external deps).
 
 Run:  python -m unittest discover -s tests
 """
@@ -7,15 +7,15 @@ import os
 import sys
 import unittest
 
-VFF_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, VFF_ROOT)
+PKG_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(PKG_ROOT))
 
 import yaml
-from vff import engine, drivers  # noqa: E402
+from ticket_autopilot.engine import engine, drivers  # noqa: E402
 
 
 def _load_wf():
-    with open(os.path.join(VFF_ROOT, "workflows", "ticket-pipeline.yaml")) as f:
+    with open(os.path.join(PKG_ROOT, "workflows", "ticket-pipeline.yaml")) as f:
         return yaml.safe_load(f)
 
 
@@ -65,7 +65,7 @@ class TestCliGuardrails(unittest.TestCase):
         # Should raise before spawning anything.
         with self.assertRaises(drivers.SecurityError):
             drivers.cli_call(agent, {"x": "y"}, {"agent": "executor"},
-                             vff_root=VFF_ROOT)
+                             engine_root=PKG_ROOT)
 
     def test_cwd_inside_allowed_root_is_allowed(self):
         agent = {
@@ -78,7 +78,7 @@ class TestCliGuardrails(unittest.TestCase):
         # `claude` may not be authenticated — that's a different error.
         try:
             drivers.cli_call(agent, {"x": "y"}, {"agent": "executor"},
-                             vff_root=VFF_ROOT)
+                             engine_root=PKG_ROOT)
         except drivers.SecurityError:
             self.fail("cwd inside allowed root should not raise SecurityError")
         except Exception:
@@ -127,7 +127,7 @@ class TestHermesDriver(unittest.TestCase):
     def test_hermes_driven_workflow_runs_in_mock(self):
         # Proves driver: hermes nodes are valid and the deterministic loop +
         # close still work (mock uses driver-agnostic canned verdicts).
-        with open(os.path.join(VFF_ROOT, "workflows",
+        with open(os.path.join(PKG_ROOT, "workflows",
                                "ticket-pipeline-hermes.yaml")) as f:
             wf = yaml.safe_load(f)
         eng = engine.Engine(wf, mock=True)

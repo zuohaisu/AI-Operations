@@ -11,8 +11,8 @@ returns a canned value instead).
 import os
 import sys
 
-# plane_client lives in ../ticket-pipeline (sibling of vivarium-forge-flow)
-_TP = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "ticket-pipeline"))
+# plane_client lives in reference/ticket-pipeline (nested under ticket_autopilot)
+_TP = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "reference", "ticket-pipeline"))
 if _TP not in sys.path:
     sys.path.insert(0, _TP)
 

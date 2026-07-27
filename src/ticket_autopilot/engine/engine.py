@@ -1,4 +1,4 @@
-"""VFF engine: declarative workflow interpreter.
+"""Ticket Autopilot Engine: declarative workflow interpreter.
 
 Two edge kinds:
   - forward (default): defines a node's `needs` (must complete before the
@@ -174,13 +174,13 @@ class Engine:
         if driver == "llm":
             return drivers.llm_call(agent, inputs, node)
         if driver == "cli":
-            return drivers.cli_call(agent, inputs, node, vff_root=_vff_root())
+            return drivers.cli_call(agent, inputs, node, engine_root=_engine_root())
         if driver == "hermes":
-            # dispatch a full Hermes sub-agent via the gateway. VFF keeps the
+            # dispatch a full Hermes sub-agent via the gateway. The Engine keeps the
             # deterministic loop + guardrails; Hermes owns execution.
             return drivers.hermes_call(agent, inputs, node, mock=False)
         if driver == "script":
-            return drivers.script_call(agent, inputs, vff_root=_vff_root())
+            return drivers.script_call(agent, inputs, engine_root=_engine_root())
         raise WorkflowError(f"unknown driver: {driver}")
         raise WorkflowError(f"unknown driver: {driver}")
 
@@ -200,5 +200,5 @@ class Engine:
         return f"mock output for {node['id']}"
 
 
-def _vff_root() -> str:
+def _engine_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

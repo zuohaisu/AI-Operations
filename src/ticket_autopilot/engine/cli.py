@@ -1,10 +1,10 @@
-"""VFF command-line entry point.
+"""Ticket Autopilot Engine command-line entry point.
 
 Usage:
-  python -m vff run workflows/ticket-pipeline.yaml --params '{"ticket_id":"..."}'
-  python -m vff run workflows/ticket-pipeline.yaml --mock          # headless self-test
-  python -m vff run workflows/ticket-pipeline.yaml --mock --params '{"ticket_id":"DEMO-1"}'
-  python -m vff runs                                          # list snapshots
+  python -m ticket_autopilot.engine run workflows/ticket-pipeline.yaml --params '{"ticket_id":"..."}'
+  python -m ticket_autopilot.engine run workflows/ticket-pipeline.yaml --mock          # headless self-test
+  python -m ticket_autopilot.engine run workflows/ticket-pipeline.yaml --mock --params '{"ticket_id":"DEMO-1"}'
+  python -m ticket_autopilot.engine runs                                          # list snapshots
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import json
 import os
 import sys
 
-VFF_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ENGINE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 from . import engine
 from . import store
@@ -39,12 +39,12 @@ def _cmd_run(args):
     print("COMPLETED:", result["completed"])
     if result["not_completed"]:
         print("NOT COMPLETED (stalled):", result["not_completed"])
-    path = store.save(wf.get("name", "workflow"), result, params, VFF_ROOT)
+    path = store.save(wf.get("name", "workflow"), result, params, ENGINE_ROOT)
     print("SNAPSHOT:", path)
 
 
 def _cmd_runs(args):
-    for p in store.list_runs(VFF_ROOT):
+    for p in store.list_runs(ENGINE_ROOT):
         print(p)
 
 
@@ -54,7 +54,7 @@ def _yaml_load(path):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="vff", description="Vivarium Forge Flow")
+    ap = argparse.ArgumentParser(prog="ticket-autopilot.engine", description="Ticket Autopilot Engine")
     sub = ap.add_subparsers(dest="cmd")
 
     runp = sub.add_parser("run", help="run a workflow")

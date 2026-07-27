@@ -1,4 +1,4 @@
-"""VFF drivers — the actual executors behind each node's `agent.driver`.
+"""Engine drivers — the actual executors behind each node's `agent.driver`.
 
   - llm   : OpenAI-compatible /chat/completions over urllib (no SDK dep).
             Reads XY_LLM_BASE_URL / XY_LLM_API_KEY / XY_LLM_MODEL from env;
@@ -23,7 +23,7 @@ import subprocess
 import sys
 import urllib.request
 
-DEFAULT_ALLOWED_ROOTS = ["sandbox"]  # relative to vff root; strict default
+DEFAULT_ALLOWED_ROOTS = ["sandbox"]  # relative to engine root; strict default
 
 
 class SecurityError(Exception):
@@ -93,8 +93,8 @@ def llm_call(agent: dict, inputs: dict, node: dict) -> object:
 # ---------------------------------------------------------------------------
 # hermes driver — dispatch a full Hermes *sub-agent* via the gateway's
 # OpenAI-compatible API. One call = "spawn a Hermes agent (with its tools,
-# skills, and delegate_task) to do X". This is how VFF uses Hermes as the
-# node-execution backend while keeping VFF's deterministic loop + guardrails.
+# skills, and delegate_task) to do X". This is how the Engine uses Hermes as the
+# node-execution backend while keeping the Engine's deterministic loop + guardrails.
 #
 # Gateway surface (aiohttp, default http://localhost:8642/v1):
 #   POST /v1/chat/completions  — OpenAI format, returns agent text (sync)
@@ -143,9 +143,9 @@ def hermes_call(agent: dict, inputs: dict, node: dict, mock: bool = False) -> ob
 # cli driver (strict sandbox)
 # ---------------------------------------------------------------------------
 
-def _resolve_within_root(relpath: str, vff_root: str, allowed_roots) -> str:
-    roots = [os.path.join(vff_root, r) for r in allowed_roots]
-    target = os.path.abspath(os.path.join(vff_root, relpath))
+def _resolve_within_root(relpath: str, engine_root: str, allowed_roots) -> str:
+    roots = [os.path.join(engine_root, r) for r in allowed_roots]
+    target = os.path.abspath(os.path.join(engine_root, relpath))
     if not any(os.path.commonpath([target, r]) == r for r in roots):
         raise SecurityError(
             f"cwd '{target}' is outside allowed roots {roots}. "
@@ -154,9 +154,9 @@ def _resolve_within_root(relpath: str, vff_root: str, allowed_roots) -> str:
     return target
 
 
-def cli_call(agent: dict, inputs: dict, node: dict, vff_root: str) -> object:
+def cli_call(agent: dict, inputs: dict, node: dict, engine_root: str) -> object:
     allowed_roots = agent.get("allowed_roots", DEFAULT_ALLOWED_ROOTS)
-    cwd = _resolve_within_root(agent.get("cwd", "sandbox"), vff_root, allowed_roots)
+    cwd = _resolve_within_root(agent.get("cwd", "sandbox"), engine_root, allowed_roots)
 
     command = agent.get("command", "claude")
     permission_mode = agent.get("permission_mode", "read-only")
@@ -182,11 +182,11 @@ def cli_call(agent: dict, inputs: dict, node: dict, vff_root: str) -> object:
 # script driver
 # ---------------------------------------------------------------------------
 
-def script_call(agent: dict, inputs: dict, vff_root: str) -> object:
+def script_call(agent: dict, inputs: dict, engine_root: str) -> object:
     entry = agent.get("entry")
     if not entry:
         raise ValueError("script driver requires `entry` (handlers/<entry>.py)")
-    handlers_dir = os.path.join(vff_root, "vff", "handlers")
+    handlers_dir = os.path.join(engine_root, "engine", "handlers")
     if handlers_dir not in sys.path:
         sys.path.insert(0, handlers_dir)
     mod = importlib.import_module(entry)
