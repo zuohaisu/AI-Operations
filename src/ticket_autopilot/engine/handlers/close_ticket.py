@@ -1,26 +1,16 @@
-"""Closer handler — the only node that touches Plane in the real run.
+"""Closer handler — the Engine's single Plane side-effecting node.
 
-Invoked by the `script` driver as `close_ticket(**inputs)`. Uses the existing
-plane_client (shared with the ticket-pipeline orchestrator) to post the
-plan+result as a comment and move the ticket to done.
-
-In `--mock` mode this handler is never called (the workflow's `mock.closer`
-returns a canned value instead).
+The handler formats workflow evidence, then delegates all Plane I/O to the
+parameterized connector.  In ``--mock`` mode the Engine returns its canned
+closer value and this function is not called.
 """
 
-import os
-import sys
+from __future__ import annotations
 
-# plane_client lives in reference/ticket-pipeline (nested under ticket_autopilot)
-_TP = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "reference", "ticket-pipeline"))
-if _TP not in sys.path:
-    sys.path.insert(0, _TP)
-
-import plane_client as pc  # noqa: E402
+from ticket_autopilot.connectors.plane import close_ticket as close_plane_ticket
 
 
-def close_ticket(ticket_id: str, plan: str, result: str) -> dict:
-    comment = f"## Plan\n{plan}\n\n## Execute result\n{result}\n"
-    pc.add_comment(ticket_id, comment)
-    pc.set_state(ticket_id, "done")
-    return {"closed": True, "ticket_id": ticket_id}
+def close_ticket(ticket_id: str, plan: object, result: object) -> dict:
+    """Post plan/execution evidence and move the configured Plane ticket to Done."""
+    summary = f"## Plan\n{plan}\n\n## Execute result\n{result}\n"
+    return close_plane_ticket(ticket_id, summary)
