@@ -67,7 +67,7 @@
   "non_blocking_comments": [
     "F-1（scope_creep_not_enforced，attempt 2/3 复现）已于 attempt 4 验证关闭：修复真实落盘（parse_draft finditer 重复标题检测 + 回归单测），QA 用 attempt 3 原探针独立复现拒绝行为，且正向单票 / 显式两票组 / 组内残缺子票路径均无回归。",
     "本机无 python 命令，验收提示词 §4 的 'python tooling/spec_to_issue.py' 需以 python3 执行（SKILL.md 已统一使用 python3，建议验收提示词同步）。",
-    "QA 复现夹具保留于 .qa-tmp/（untracked），提交前可清理。"
+    "QA 复现夹具（.qa-tmp/）为验收临时构造，验收后已全部删除，未污染开发工件；拒绝行为的防回归由 tests/unit/test_spec_to_issue.py 永久单测覆盖（运行时 tempfile 自建探针）。"
   ],
   "recommended_next_state": "READY_FOR_HUMAN_REVIEW"
 }
