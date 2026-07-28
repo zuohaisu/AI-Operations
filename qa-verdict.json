@@ -1,72 +1,73 @@
 {
   "schema_version": "1.0",
-  "issue_key": "AIO-6",
-  "run_id": "aio-6-qa-20260728-1",
-  "qa_attempt": 1,
+  "issue_key": "AIO-4",
+  "run_id": "aio-4-qa-20260728-4",
+  "qa_attempt": 4,
   "verdict": "PASS",
   "acceptance_criteria": [
     {
       "id": "AC-1",
       "status": "PASS",
       "evidence": [
-        "test_drivers.py 含 4 个 driver 各自独立单测类：TestLlmDriver（L31-L75，3 测）、TestCliDriver（L78-L110，2 测）、TestHermesDriver（L113-L160，3 测）、TestScriptDriver（L163-L169，1 测）",
-        "llm：L37/L60 @mock.patch('ticket_autopilot.engine.drivers.urllib.request.urlopen')，断言 URL/Bearer/model（L51-L53）、expect:json 含围栏容错（L61-L70）、缺 env 抛 RuntimeError（L72-L75）",
-        "cli：L79 mock subprocess.run，断言 --permission-mode read-only / --allowedTools / --cwd / cwd 拼接（L94-L101）；L103-L110 test_rejects_outside_sandbox_before_spawning 断言 cwd=/etc 抛 drivers.SecurityError 且 run.assert_not_called()",
-        "hermes：L114-L120 mock=True 返回 marker 且 urlopen.assert_not_called()；L146-L160 test_engine_routes_hermes_with_agent_inputs_and_node 以 mock.patch hermes_call 作路由 spy，断言 Engine 以 (agent, inputs, node, mock=False) 精确分发",
-        "script：L164-L169 调用 fixture handler handlers/_test_echo.py（无副作用回声函数），断言原样返回 inputs"
+        "specs/agent-ready-ticket-template.md 含 9 字段（L40-L81）+ 空白可填模板（L94-L136）+ Spec→Plane 操作流程（L138-L147）+ worked example（L151-L184）",
+        "grep -n \"Spec → Plane\\|防范围蔓延\\|工单组\" 命中 L17 工单组拆分规则 / L27 防范围蔓延核对清单（hard gate）/ L138 Spec → Plane issue 操作流程",
+        "L36-L38 In Progress contract gate：任一字段缺失/占位即不得 In Progress，须报 BLOCKED_NEEDS_HUMAN；L8 声明唯一权威模板"
       ]
     },
     {
       "id": "AC-2",
       "status": "PASS",
       "evidence": [
-        "test_drivers.py L172-L180 TestDriverWorkflowDispatch.test_ticket_pipeline_runs_in_mock_mode：yaml.safe_load 加载 workflows/ticket-pipeline.yaml → Engine(workflow, mock=True).run({'ticket_id':'AIO-6'}) → 断言 'plan' in result['completed'] 且 outputs['plan'] == 'Mock plan for ${params.ticket_id}'",
-        "真跑确认该测试通过：test_ticket_pipeline_runs_in_mock_mode ... ok"
+        ".workbuddy/skills/spec-to-plane-issue/SKILL.md 与 tooling/spec_to_issue.py 双形态均存在且可运行（python3，本机无 python 命令）",
+        "对 tests/fixtures/sample-spec.md 运行 dry-run 产出完整 9 字段草稿：Out-of-scope 非空、AC 为 Given/When/Then、Verification 含反引号内可执行命令；EXIT=0",
+        "多票支持验证（attempt 4 R5）：'# Ticket 1/2' 显式两票组 E2E 放行，渲染 2 个 '# Ticket' 分组，EXIT=0"
       ]
     },
     {
       "id": "AC-3",
       "status": "PASS",
       "evidence": [
-        "engine/README.md L143-L159『Driver contract』表逐项与 drivers.py 一致核验：llm 需 XY_LLM_BASE_URL/XY_LLM_API_KEY/XY_LLM_MODEL（README L153 ↔ drivers.py L64-L66）；cli 默认 command=claude/cwd=sandbox/allowed_roots=[sandbox]/permission_mode=read-only、越界抛 SecurityError（L154 ↔ L157-L163、L150）；hermes HERMES_API_URL 默认 http://localhost:8642/v1、HERMES_MODEL 默认 hermes-agent、session_key 覆盖 HERMES_SESSION_KEY（L155 ↔ L112-L114、L127）；script 加载 handlers/<entry>.py 调 <entry>(**inputs)、entry 必填（L156 ↔ L185-L194）",
-        "YAML 字段：README L128 agents.<name>.driver ∈ llm|cli|hermes|script；L130 expect: json 解析（含 fenced json，L153 ↔ drivers.py L43-L56）",
-        "mock 开关：README L146-L149 声明 Engine(mock=True) 在分发前返回 canned output，real 模式对 hermes 恒传 mock=False（↔ engine.py L169-L172、L181）",
-        "未知 driver 契约：README L149『an unknown driver raises WorkflowError(\"unknown driver: <name>\")』↔ engine.py L184；未发现虚构或缺失字段"
+        "残缺 spec（.qa-tmp/broken-spec.md，缺 Out-of-scope + Verification 空）→ 'BLOCKED: Verification method ... is empty or contains a placeholder'，EXIT=1，未产出半截工单",
+        "AC 不可测 spec（.qa-tmp/untestable-ac.md）→ 'BLOCKED: Acceptance criterion is not measurable'，EXIT=1",
+        "工单组含残缺子票（.qa-tmp/second-unit.md Ticket 2 缺 Out-of-scope）→ 'BLOCKED: Scope boundary requires a non-empty Out of scope'，EXIT=1，父票无法掩盖",
+        "F-1 修复验证（attempt 4 R1）：attempt 3 原复现探针 .qa-tmp/dup-heading-unsplit.md（无 # Ticket 标记、含 2 个 '## 1. Title'）→ 'BLOCKED: spec contains multiple independently shippable units; apply the 工单组拆分规则 and separate drafts with # Ticket <n>'，EXIT=1，stdout 零渲染——应拆未拆 spec 不再被静默放行",
+        "修复实现核验：tooling/spec_to_issue.py L85-L92 parse_draft 以 finditer 检测同一草稿内任一编号字段标题出现 >1 次即 raise ContractError，符合 attempt 3 required_fix",
+        "防回归单测已落盘：tests/unit/test_spec_to_issue.py L38-L56 test_unmarked_duplicate_ticket_is_blocked_without_preview 断言 EXIT=1 + stdout 空 + stderr 含 '工单组拆分规则' 与 '# Ticket <n>'"
       ]
     },
     {
       "id": "AC-4",
       "status": "PASS",
       "evidence": [
-        "真跑（pytest 在本机 python3/python3.11 均未安装，按提示词回退命令）：PYTHONPATH=src python3 -m unittest discover -s src/ticket_autopilot/engine/tests -v → Ran 18 tests in 0.033s / OK / EXIT=0（test_drivers.py 11 测 + test_engine.py 原有 7 测全绿）",
-        "grep -n SecurityError src/ticket_autopilot/engine/drivers.py → 29:class SecurityError(Exception): / 150: raise SecurityError( — 护栏 intact",
-        "test_engine.py 唯一改动为 test_cwd_inside_allowed_root_is_allowed 改用 mock subprocess（确定性增强）；SecurityError 拒绝路径测试 test_cwd_outside_allowed_root_is_rejected 未动且仍绿，护栏语义未削弱"
+        "python3 tooling/spec_to_issue.py --dry-run --spec tests/fixtures/sample-spec.md --assert → EXIT=0（attempt 4 R3 重跑确认修复未误伤正向路径）",
+        "python3 -m unittest tests.unit.test_spec_to_issue -v → Ran 7 tests, OK（新增拆分回归测试后 7/7），EXIT=0",
+        "回归：PYTHONPATH=src python3 -m unittest ticket_autopilot.engine.tests.test_engine ticket_autopilot.engine.tests.test_drivers → Ran 18 tests, OK",
+        "offline 核验：脚本无 urllib/requests/socket 导入、无凭据读取；--apply → EXIT=2 硬拒 'BLOCKED: this offline validator never writes Plane'（attempt 4 重跑确认）"
       ]
     },
     {
       "id": "AC-5",
       "status": "PASS",
       "evidence": [
-        "git diff --stat HEAD（引擎范围）：engine/README.md +20/-1（契约文档节）、engine.py -1（仅删重复 raise）、test_engine.py +5/-7（guardrail 测试 mock 化）；新增文件仅 tests/test_drivers.py 与 handlers/_test_echo.py（6 行无副作用测试 fixture）",
-        "git diff HEAD -- pyproject.toml 为空 — 无新增依赖",
-        "无新护栏逻辑、无新平台/编排、connectors/ 与 close_ticket.py 未被改动、无生产密钥变更"
+        "git diff --stat 仅 qa-verdict.json 与 specs/agent-ready-ticket-template.md；untracked 新增仅 tooling/spec_to_issue.py、.workbuddy/skills/spec-to-plane-issue/、tests/fixtures/sample-spec.md、tests/unit/test_spec_to_issue.py、.qa-tmp/（QA 自建夹具）；F-1 修复仅改动 tooling/spec_to_issue.py 与其单测，未扩 scope",
+        "src/ticket_autopilot/engine/*、connectors/、reference/ticket-pipeline/plane_client.py 零运行期改动（Engine 18/18 回归佐证）；未新建编排框架或 HTTP client",
+        "CONTRIBUTING.md 与 .github/PULL_REQUEST_TEMPLATE.md 不在本票 diff 中（属 AIO-3 commit e409958），模板仅 forward-reference（L10、L147），未越界实现",
+        "git diff --check EXIT=0；全程未触网写入真实 Plane"
       ]
     },
     {
       "id": "AC-6",
       "status": "PASS",
       "evidence": [
-        "git diff engine.py 确认 L184-L185 重复 raise WorkflowError 已去重，仅剩一行；grep -c 'unknown driver' engine.py = 1",
-        "有配套测试：test_drivers.py L182-L189 test_unknown_driver_raises_workflow_error 断言 WorkflowError('unknown driver: not-a-driver')；有文档声明：README L149"
+        "开发未执行 AC-6（未发现真实 DRAFT 示例工单，git 历史与 runs/ 无本票 Plane 写入痕迹）；该项 optional/non-blocking，不判 FAIL"
       ]
     }
   ],
   "findings": [],
   "non_blocking_comments": [
-    "环境备注：本机无 `python` 命令且 pytest 未安装于 python3/python3.11，AC-4 按提示词 §2 允许的回退命令以 python3 -m unittest discover 真跑，18 测全绿 EXIT=0。",
-    "工作区另有与本票无关的未提交改动（.workbuddy/memory/*、tasks/AIO-002~005 提示词增删归档），均为流程管理工件而非引擎代码，不计入 AC-5 越界。",
-    "handlers/_test_echo.py 以下划线前缀命名并注明 fixture 用途，与 script driver 的 handlers/<entry> 装载约定一致，无生产副作用。",
-    "本文件覆写了先前 AIO-2 的 qa-verdict.json（AIO-2 verdict=PASS，已随其票据流程消费）。"
+    "F-1（scope_creep_not_enforced，attempt 2/3 复现）已于 attempt 4 验证关闭：修复真实落盘（parse_draft finditer 重复标题检测 + 回归单测），QA 用 attempt 3 原探针独立复现拒绝行为，且正向单票 / 显式两票组 / 组内残缺子票路径均无回归。",
+    "本机无 python 命令，验收提示词 §4 的 'python tooling/spec_to_issue.py' 需以 python3 执行（SKILL.md 已统一使用 python3，建议验收提示词同步）。",
+    "QA 复现夹具保留于 .qa-tmp/（untracked），提交前可清理。"
   ],
   "recommended_next_state": "READY_FOR_HUMAN_REVIEW"
 }
