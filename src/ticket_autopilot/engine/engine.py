@@ -182,7 +182,6 @@ class Engine:
         if driver == "script":
             return drivers.script_call(agent, inputs, engine_root=_engine_root())
         raise WorkflowError(f"unknown driver: {driver}")
-        raise WorkflowError(f"unknown driver: {driver}")
 
     def _mock_output(self, node, agent_name) -> object:
         cfg = self.mock_cfg.get(agent_name, {})

@@ -6,6 +6,7 @@ Run:  python -m unittest discover -s tests
 import os
 import sys
 import unittest
+from unittest import mock
 
 PKG_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(PKG_ROOT))
@@ -74,15 +75,12 @@ class TestCliGuardrails(unittest.TestCase):
             "cwd": "./sandbox",       # inside allowed root
             "tools": ["Read", "Glob", "Grep"],
         }
-        # No SecurityError on the path check; it will only fail later because
-        # `claude` may not be authenticated — that's a different error.
-        try:
+        # Mock the process: this test verifies only the existing path guardrail.
+        with mock.patch("ticket_autopilot.engine.drivers.subprocess.run") as run:
+            run.return_value = mock.Mock(returncode=0, stdout="ok", stderr="")
             drivers.cli_call(agent, {"x": "y"}, {"agent": "executor"},
                              engine_root=PKG_ROOT)
-        except drivers.SecurityError:
-            self.fail("cwd inside allowed root should not raise SecurityError")
-        except Exception:
-            pass  # any non-guardrail error is fine for this assertion
+        run.assert_called_once()
 
 
 class TestHermesDriver(unittest.TestCase):

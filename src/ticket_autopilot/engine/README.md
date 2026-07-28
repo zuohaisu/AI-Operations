@@ -125,7 +125,7 @@ edges:
 | Key | Meaning |
 |---|---|
 | `vars` | reusable constants, referenced as `${vars.x}` |
-| `agents.<name>.driver` | `llm` \| `cli` \| `hermes` \| `script` \| (mock, CLI-only flag) |
+| `agents.<name>.driver` | `llm` \| `cli` \| `hermes` \| `script` (mock mode is an Engine flag, not a driver) |
 | `agents.<name>.system` | system prompt for llm/cli |
 | `agents.<name>.expect` | `json` → parse agent output as JSON (verifier) |
 | `agents.<name>.cwd` / `tools` / `permission_mode` | **cli guardrails** (see below) |
@@ -139,6 +139,24 @@ edges:
 `when` / `${...}` are Python expressions over the run context:
 `nodes.<id>` (captured output; dict → attribute access),
 `params`, `vars`, `retry` (per-edge retry count).
+
+## Driver contract
+
+`Engine._run_node` resolves a node's inputs, selects
+`agents.<name>.driver`, and dispatches it as follows. In `Engine(..., mock=True)`
+the Engine returns configured canned output before dispatching any driver; no
+network request, CLI process, or script handler is invoked. In real mode, an
+unknown driver raises `WorkflowError("unknown driver: <name>")`.
+
+| Driver | Function and required YAML fields | Configuration | Return value |
+|---|---|---|---|
+| `llm` | `llm_call(agent, inputs, node)`; `driver: llm` | Requires `XY_LLM_BASE_URL`, `XY_LLM_API_KEY`, and `XY_LLM_MODEL`, unless `agents.<name>.model` supplies the model. `system` and `temperature` are optional. | Assistant text, or a decoded JSON value when `expect: json`. JSON fenced in a ```json block is accepted. |
+| `cli` | `cli_call(agent, inputs, node, engine_root)`; `driver: cli` | Optional `command` (default `claude`), `cwd` (default `sandbox`), `allowed_roots` (default `[sandbox]`), `permission_mode` (default `read-only`), `tools`, and `system`. | Trimmed CLI stdout, or decoded JSON when `expect: json`. A cwd outside an allowed root raises `SecurityError` before spawning. |
+| `hermes` | `hermes_call(agent, inputs, node, mock=False)`; `driver: hermes` | `HERMES_API_URL` defaults to `http://localhost:8642/v1`; optional `HERMES_API_KEY`, `HERMES_MODEL` (default `hermes-agent`), and `HERMES_SESSION_KEY`. Agent `model` and `session_key` override their environment counterparts. | Assistant text, or decoded JSON when `expect: json`. Calling the driver itself with `mock=True` returns a marker dict and does not contact the gateway. Engine real-mode dispatch always passes `mock=False`. |
+| `script` | `script_call(agent, inputs, engine_root)`; `driver: script`, `entry: name` | Loads `engine/handlers/<entry>.py`, then calls `<entry>(**inputs)`. `entry` is required. | Exactly the handler function's return value. |
+
+All network-facing driver calls use an OpenAI-compatible
+`POST /chat/completions` request and format node inputs as `key: value` lines.
 
 ## CLI guardrails (strict by default — per user decision)
 
