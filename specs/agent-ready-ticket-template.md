@@ -4,6 +4,8 @@
 >
 > Purpose: a ticket an AI agent can pick up and execute autonomously the moment it is moved to **In Progress**. Product discussion's real deliverable is a backlog of these — not vague titles.
 > Fits the closed loop: Ticket → Dev → Deterministic Verification → Independent QA → Bounded Fix → PR → Status Update.
+>
+> **Single authority:** this is the repository's only authoritative agent-ready ticket template. Reuse and tighten this format; do not create a competing template or ticket schema.
 
 For branch, PR, review, and status conventions, see [CONTRIBUTING.md](../CONTRIBUTING.md). For the authoritative operational stages and evidence gates, see [the closed-loop workflow](../docs/closed-loop-workflow.md).
 
@@ -11,6 +13,29 @@ For branch, PR, review, and status conventions, see [CONTRIBUTING.md](../CONTRIB
 - One ticket = one independently shippable unit. If it needs 5 human decisions mid-way, split it.
 - Fill **every Required field**. A ticket missing Verification or Scope Boundary must not be moved to In Progress.
 - Keep it boring and explicit. Agents fail on ambiguity, not on difficulty.
+
+## 工单组拆分规则
+
+Keep one Plane issue when the spec has one independently shippable outcome, one verification gate, and no separately releasable dependency. Split it into an issue group when any of the following is true:
+
+- It contains two or more independently shippable outcomes, each of which can have its own acceptance criteria and deterministic verification.
+- One change is a prerequisite for another, so the dependent work cannot start or be verified without the prerequisite.
+- The outcomes have different owners, risk/rollback paths, or human gates that would make one nine-field contract ambiguous.
+
+Create the prerequisite issue first; make each dependent issue name and link its prerequisite in **Dependencies**. Do not use a parent issue to hide incomplete fields: every child is a complete nine-field contract, has its own non-empty Out of scope list, and can be independently moved to In Progress. Keep shared rationale in the source spec and link it rather than duplicating mutable material.
+
+## 防范围蔓延核对清单（hard gate）
+
+Before a draft becomes a Plane issue, all checks below must pass:
+
+- [ ] **Out of scope** exists and contains at least one concrete non-goal; “TBD”, “N/A”, and empty lists fail.
+- [ ] Every Acceptance criterion is a pass/fail statement, written as Given/When/Then or with an equally objective observable result.
+- [ ] **Verification method** contains an exact, mechanically runnable command or a concrete deterministic inspection procedure wherever a command is not possible.
+- [ ] The work changes only the stated In scope items; new ideas become a new spec or linked ticket, never an implicit addition.
+
+## In Progress contract gate
+
+A PM, automation, or reviewer must keep a ticket in planning/Backlog when any of the nine required fields is absent or placeholder-only, when Scope boundary or Verification method is missing, or when the hard-gate checklist fails. Such a ticket is **not eligible for In Progress**; report it as `BLOCKED_NEEDS_HUMAN` rather than guessing or starting partial work.
 
 ## Required fields
 
@@ -114,10 +139,12 @@ Copy this block into a planning document or the Plane issue description. Replace
 
 1. Draft the ticket from the **空白可填模板** and complete all nine required fields.
 2. Check that Scope boundary, Acceptance criteria, Verification method, Dependencies, Risk & rollback, and Human touchpoints are concrete; otherwise keep the spec in planning and resolve the gap.
-3. Create one Plane issue with the Title as its title and the completed nine-field template as its description. Add the relevant project, priority, labels, and dependency links.
-4. Re-read the Plane description against the source spec. The Plane issue becomes the execution contract; link the source spec rather than duplicating changing material.
-5. A PM or designated human moves a complete issue to **In Progress**. The development agent follows the contract and records evidence.
-6. After the Definition of Done and required evidence gates are met, the Controller or human prepares the PR using the [PR template](../.github/PULL_REQUEST_TEMPLATE.md) and moves the issue to **In Review**. Failed evidence or an unresolved ambiguity maps to **Blocked** / `BLOCKED_NEEDS_HUMAN` as described in [CONTRIBUTING.md](../CONTRIBUTING.md).
+3. Apply the **工单组拆分规则**. Produce one complete nine-field draft per independently shippable unit and record prerequisite links in Dependencies.
+4. Run the project `spec-to-plane-issue` skill in its default dry-run mode (or its offline validator). Any failed hard-gate check is `BLOCKED_NEEDS_HUMAN`; do not create a partial issue.
+5. Create one Plane issue per passing draft with the Title as its title and the completed nine-field template as its description. Add the relevant project, priority, labels, and dependency links. Plane writes require an explicit apply action and human confirmation.
+6. Re-read each Plane description against the source spec. The Plane issue becomes the execution contract; link the source spec rather than duplicating changing material.
+7. A PM or designated human moves only a complete issue to **In Progress**. The development agent follows the contract and records evidence.
+8. After the Definition of Done and required evidence gates are met, the Controller or human prepares the PR using the [PR template](../.github/PULL_REQUEST_TEMPLATE.md) and moves the issue to **In Review**. Failed evidence or an unresolved ambiguity maps to **Blocked** / `BLOCKED_NEEDS_HUMAN` as described in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ---
 
