@@ -158,22 +158,43 @@ def cli_call(agent: dict, inputs: dict, node: dict, engine_root: str) -> object:
     allowed_roots = agent.get("allowed_roots", DEFAULT_ALLOWED_ROOTS)
     cwd = _resolve_within_root(agent.get("cwd", "sandbox"), engine_root, allowed_roots)
 
-    command = agent.get("command", "claude")
-    permission_mode = agent.get("permission_mode", "read-only")
-    tools = agent.get("tools", [])
+    prompt = _format_prompt(inputs)
+    system = agent.get("system", "")
 
-    cmd = [command, "-p", _format_prompt(inputs),
-           "--permission-mode", permission_mode,
-           "--cwd", cwd]
-    if tools:
-        cmd += ["--allowedTools", ",".join(tools)]
-    if agent.get("system"):
-        cmd += ["--append-system-prompt", agent["system"]]
+    argv = agent.get("argv")
+    if argv:
+        # full command template with {prompt}/{cwd}/{system} placeholders —
+        # for CLIs whose flag style differs from claude (codex exec, pi).
+        if system and not any("{system}" in part for part in argv):
+            prompt = f"{system}\n\n{prompt}"
+        cmd = [part.replace("{prompt}", prompt)
+                   .replace("{cwd}", cwd)
+                   .replace("{system}", system)
+               for part in argv]
+    else:
+        command = agent.get("command", "claude")
+        permission_mode = agent.get("permission_mode", "read-only")
+        tools = agent.get("tools", [])
+        # claude expects `--allowedTools a,b`; qodercli expects variadic `--tools a b`.
+        tools_flag = agent.get("tools_flag", "--allowedTools")
+        tools_as_args = agent.get("tools_as_args", False)
+
+        cmd = [command, "-p", prompt,
+               "--permission-mode", permission_mode,
+               "--cwd", cwd]
+        if tools:
+            if tools_as_args:
+                cmd += [tools_flag, *tools]
+            else:
+                cmd += [tools_flag, ",".join(tools)]
+        if system:
+            cmd += ["--append-system-prompt", system]
+        cmd += agent.get("extra_args", [])
 
     proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=600)
     if proc.returncode != 0:
         raise RuntimeError(
-            f"cli driver ({command}) exited {proc.returncode}: {proc.stderr}"
+            f"cli driver ({cmd[0]}) exited {proc.returncode}: {proc.stderr}"
         )
     return _maybe_json(proc.stdout.strip(), agent)
 

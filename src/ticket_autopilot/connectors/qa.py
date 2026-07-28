@@ -1,0 +1,120 @@
+"""Independent QA connector: call the QA CLI, validate the verdict, gate the loop.
+
+Three steps (AIO-7): invoke the QA agent read-only via drivers.cli_call ->
+parse the qa-verdict JSON -> deterministic schema validation. Mapping to the
+engine decision (spec §2.4, no false success):
+
+  schema-valid verdict == "PASS"        -> {"decision": "accept", "verdict": ...}
+  schema-valid verdict FAIL / BLOCKED   -> {"decision": "reject", "verdict": ...}
+  CLI failure / parse failure / invalid -> {"decision": "reject", "verdict": BLOCKED}
+
+Only a schema-valid PASS may ever produce accept.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+
+from ..engine import drivers
+from ..schemas.qa_verdict import validate_verdict
+
+_PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+QA_SYSTEM_PROMPT = """You are the independent QA Verifier. Using only read-only \
+inspection, verify the execution result against the plan and the ticket context \
+(acceptance criteria, diff, test evidence). You must not modify code or add tests.
+Reply with ONLY a qa-verdict JSON object with exactly these fields:
+schema_version ("1.0"), issue_key, run_id, qa_attempt (integer),
+verdict ("PASS"|"FAIL"|"BLOCKED"),
+acceptance_criteria (array of {id, status: "PASS"|"FAIL"|"BLOCKED", evidence: [strings]}),
+findings (array of {id, severity: "blocker"|"major"|"minor", type,
+acceptance_criterion_id, summary, evidence, required_fix}) where evidence is a
+JSON OBJECT (not a string/array), e.g. {"file": "...", "observed": "...", "expected": "..."},
+non_blocking_comments (array), recommended_next_state."""
+
+# read-only guardrails: qodercli has no read-only permission mode, so the
+# restricted tool set is the enforcement (same rationale as the workflow YAML).
+# --allowed-tools auto-approves ONLY the read tools in non-interactive -p mode
+# (verified live: reads succeed, writes are denied and no file is created).
+QA_AGENT = {
+    "driver": "cli",
+    "command": "qodercli",
+    "cwd": "sandbox",
+    "permission_mode": "default",
+    "tools": ["Read", "Glob", "Grep"],
+    "tools_flag": "--tools",
+    "tools_as_args": True,
+    "extra_args": ["--allowed-tools", "Read,Glob,Grep", "--no-session-persistence"],
+    "expect": "json",
+    "system": QA_SYSTEM_PROMPT,
+}
+
+
+def _blocked_verdict(reason: str, raw: object = None) -> dict:
+    return {
+        "schema_version": "1.0",
+        "issue_key": "UNKNOWN",
+        "run_id": "UNKNOWN",
+        "qa_attempt": 0,
+        "verdict": "BLOCKED",
+        "acceptance_criteria": [],
+        "findings": [{
+            "id": "QA-BLOCKED",
+            "severity": "blocker",
+            "type": "QA_OUTPUT_INVALID",
+            "acceptance_criterion_id": "N/A",
+            "summary": reason,
+            "evidence": {"raw": repr(raw)[:500]},
+            "required_fix": "QA agent must emit a schema-valid qa-verdict JSON object.",
+        }],
+        "non_blocking_comments": [],
+        "recommended_next_state": "BLOCKED_NEEDS_HUMAN",
+    }
+
+
+def run_qa(plan=None, result=None, ticket_context=None, agent=None,
+           engine_root=None) -> dict:
+    agent = agent or QA_AGENT
+    engine_root = engine_root or _PKG_ROOT
+    inputs = {
+        "ticket_context": ticket_context or "(no ticket context provided yet — AIO-8 fills this)",
+        "plan": plan,
+        "result": result,
+    }
+
+    try:
+        raw = drivers.cli_call(agent, inputs, {"agent": "verifier"}, engine_root)
+    except Exception as exc:  # CLI crash / non-zero exit / timeout / bad JSON
+        return {"decision": "reject",
+                "verdict": _blocked_verdict(f"QA CLI failed: {exc}")}
+
+    verdict = raw
+    if isinstance(verdict, str):
+        try:
+            verdict = json.loads(verdict)
+        except json.JSONDecodeError:
+            return {"decision": "reject",
+                    "verdict": _blocked_verdict("QA output is not JSON", raw)}
+
+    valid, errors = validate_verdict(verdict)
+    if not valid:
+        return {"decision": "reject",
+                "verdict": _blocked_verdict(
+                    f"qa-verdict schema validation failed: {'; '.join(errors)}", verdict)}
+
+    if verdict["verdict"] == "PASS":
+        # §9.3: PASS requires every AC to pass and no blocker/major finding.
+        failed_acs = [ac["id"] for ac in verdict["acceptance_criteria"]
+                      if ac["status"] != "PASS"]
+        severe = [f["id"] for f in verdict["findings"]
+                  if f["severity"] in ("blocker", "major")]
+        if failed_acs or severe:
+            return {"decision": "reject",
+                    "verdict": _blocked_verdict(
+                        "PASS verdict is self-contradictory: "
+                        f"non-PASS acceptance criteria {failed_acs}, "
+                        f"blocker/major findings {severe}", verdict)}
+
+    decision = "accept" if verdict["verdict"] == "PASS" else "reject"
+    return {"decision": decision, "verdict": verdict}

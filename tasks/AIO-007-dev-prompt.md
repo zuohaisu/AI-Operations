@@ -2,6 +2,12 @@
 
 > 来源：Plane 工单 **AIO-7**（项目 "Ticket Autopilot / AIO"，`project_id=d40168f5-5d44-4810-a39e-3b6558e9bf6e`，`issue_id=ef92ac7a-1399-45db-8a83-4462d0b118a7`）。
 > 注：用户最初称「Linear 里的任务」，但 AIO 系列工单实际在 **Plane**（Linear/Builder 无 AIO 编号）。本提示词供**开发 agent** 执行实现；验收见配套 `aio-7-acceptance-prompt.md`。
+>
+> **2026-07-29 实现偏离说明（保留原文，不改写历史）**：实现已按用户拍板偏离本文三处——
+> QA agent 为 qodercli（codex 改任 planner）、engine 增加 agent 级 fallback（未改循环语义）、
+> schema 校验为零依赖手写子集。实际文件：`connectors/qa.py`（非 codex_qa.py）、
+> `engine/handlers/qa.py`、`engine/tests/test_qa.py`。详见 `logs/goal-drift.md` 2026-07-29 条目；
+> 验收以修订后的 `AIO-007-acceptance-prompt.md` 为准。
 
 ## 一、原工单要点（Plane AIO-7）
 

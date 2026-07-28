@@ -128,3 +128,318 @@ is runtime evidence from the ticket loop, not another framework or prompt artifa
 ### Recovery milestone
 
 <The evidence-backed ticket-loop outcome that demonstrates recovery.>
+
+---
+
+### 2026-07-28 — AIO-5 垂直切片：实现（Development）
+
+[Goal check] 本阶段推进闭环「Development」，证据 = `.github/workflows/ci.yml` 已写入工作区，定义 push/PR 引擎测试闸门。
+
+**Status:** Corrected
+
+### Intended outcome
+
+用原生 GitHub Actions 为既有 Engine 测试提供可逆、可 PR 的确定性验证闸门；不新建平台、不改动 Engine 或 `ticket-pipeline.yaml`。
+
+### Observed divergence
+
+`.github/workflows/` 原为空，尚无 push 或 pull request 自动执行引擎测试的 CI 工作流。
+
+### Evidence
+
+- `2026-07-28T16:08:28Z`：新增工作区文件 `.github/workflows/ci.yml`。
+- 工作流为 `Engine tests`，在 `push` 和 `pull_request` 触发；复用 `actions/checkout@v4` 与 `actions/setup-python@v5`（Python 3.11）。
+- 工作流安装 `pyyaml` 与 `pytest`，随后执行 `PYTHONPATH=src python -m pytest src/ticket_autopilot/engine/tests/ -q`。
+- 当前仅为本地未跟踪文件；未创建分支、未提交、未 push。
+
+### Facts versus inference
+
+**Facts:** 工作流只新增一个 YAML 文件；`pyproject.toml` 的运行时依赖列表为空，而测试源码导入 `yaml`，故 CI 显式安装 `pyyaml` 与 `pytest`。
+
+**Inferences:** GitHub-hosted runner 上的同一测试命令应成为 PR 的自动验证闸门；仍须由本地验证和 GitHub CI 运行实际证明。
+
+### Impact
+
+推进了真实低风险切片的 Development 阶段，并将确定性验证复用到 GitHub Actions，而非建设新的控制器或连接器。
+
+### Correction or explicit reprioritization
+
+选择 AIO-5 推荐候选「新增 GitHub Actions CI 工作流，在 push/PR 时跑 Engine 测试」：单一交付物、可机检、可通过 `git revert` 回滚。
+
+### Guard added
+
+工作流仅检查既有 Engine 测试；未加入 Plane 连接器、独立 QA 连接器、安全护栏或 Engine/DAG 改动。
+
+### Recovery milestone
+
+完成 YAML 与 Engine 测试的本地确定性验证，取得独立 QA verdict；随后在人工 git 门禁下准备 feature branch/commit/草稿 PR。
+
+---
+
+### 2026-07-28 — AIO-5 垂直切片：确定性验证（Deterministic Verification，第 1 次）
+
+[Goal check] 本阶段推进闭环「Deterministic Verification」，证据 = YAML 解析结果和 Engine 测试命令的实际退出状态。
+
+**Status:** Detected
+
+### Intended outcome
+
+验证 CI 文件为合法 YAML，且既有 Engine 测试命令全绿。
+
+### Observed divergence
+
+YAML 解析成功，但本机 Python 3 环境未安装 `pytest`，故测试命令未能启动；这不是测试失败或 CI YAML 缺陷，仍不能记为通过。
+
+### Evidence
+
+- `2026-07-28T16:08Z`：`python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml')); print('YAML_VALID')"` 输出 `YAML_VALID`，退出 0。
+- `PYTHONPATH=src python3 -m pytest src/ticket_autopilot/engine/tests/ -q` 输出 `/Library/Developer/CommandLineTools/usr/bin/python3: No module named pytest`，退出非零。
+- `git diff --check -- .github/workflows/ci.yml logs/goal-drift.md` 退出 0。
+- `python` 命令在本机不存在；本地复验须用 `python3`，而 CI 由 `actions/setup-python` 提供 `python`。
+
+### Facts versus inference
+
+**Facts:** CI 已明确安装 `pyyaml pytest`；本机 Python 3 可导入 `yaml`，但没有 `pytest` 模块。
+
+**Inferences:** 在与 CI 安装步骤等价的隔离环境中安装这两个包后，测试应可运行；须以实际复验确认。
+
+### Impact
+
+确定性验证暂未通过，进入有界修复循环第 1/3 轮；未产生源码或 Engine 改动。
+
+### Correction or explicit reprioritization
+
+在 `/tmp` 创建临时 Python 虚拟环境，安装与 CI 同一组测试依赖，再原样运行测试（本地解释器名改为 `python3`）。
+
+### Guard added
+
+不将缺少本机测试依赖误报为通过，也不为此修改 Engine、DAG、依赖平台或连接器。
+
+### Recovery milestone
+
+隔离环境中 YAML 解析与 `src/ticket_autopilot/engine/tests/` 均通过；若仍失败，才修改本票范围内的 CI 文件并复验。
+
+---
+
+### 2026-07-28 — AIO-5 垂直切片：有界修复循环（第 1/3 轮）
+
+[Goal check] 本阶段推进闭环「Bounded Fix Loop」，证据 = 隔离环境复验通过且仓库实现零额外修改。
+
+**Status:** Corrected
+
+### Intended outcome
+
+在不越过 AIO-5 范围的前提下，消除确定性验证的本机依赖阻塞并复验。
+
+### Observed divergence
+
+第 1 次验证仅因本机缺少 `pytest` 无法启动；随后发现 Runbook 简写的 `python -m ticket_autopilot.engine run --mock` 少了当前 CLI 必需的 workflow 位置参数。两者均非 CI YAML、Engine 或测试断言缺陷。
+
+### Evidence
+
+- 在仓库外的临时路径 `/tmp/aio5-ci-venv` 创建虚拟环境，并安装 CI 同款 `pyyaml pytest`；没有写入仓库。
+- `python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml')); print('YAML_VALID')"`（虚拟环境）输出 `YAML_VALID`，退出 0。
+- 精确 CI 测试命令（通过虚拟环境 PATH）：`PYTHONPATH=src python -m pytest src/ticket_autopilot/engine/tests/ -q` 输出 `18 passed`，退出 0。
+- 针对 Runbook 所称历史 Engine 测试数：`PYTHONPATH=src python -m pytest src/ticket_autopilot/engine/tests/test_engine.py -q` 输出 `7 passed`，退出 0；目录现包含额外 driver 测试，故完整 CI 命令为 18 passed。
+- 修正后的复用 Engine 自检：`PYTHONPATH=src python -m ticket_autopilot.engine run src/ticket_autopilot/workflows/ticket-pipeline.yaml --mock --params '{"ticket_id":"AIO-5"}'` 完成 plan/execute/verify/close，输出 `RETRIES: {2: 2}` 与 `COMPLETED: ['close', 'execute', 'plan', 'verify']`。`--mock` 不调用真实 Plane。
+- `git diff --check -- .github/workflows/ci.yml logs/goal-drift.md` 退出 0。
+
+### Facts versus inference
+
+**Facts:** CI 配置本身先安装测试依赖；测试目录当前实测 18 项，`test_engine.py` 单文件实测 7 项；CLI 的 `run` 子命令要求 workflow 参数。
+
+**Inferences:** GitHub Actions 在 push/PR 上安装同一依赖后，应得到相同的测试通过结果；远端运行仍须在 PR 建立后由 GitHub 实际确认。
+
+### Impact
+
+确定性验证已恢复为通过。本阶段只修复本地验证环境/调用方式，没有产生需回滚的产品代码；修复循环消耗 1/3 预算。
+
+### Correction or explicit reprioritization
+
+保持 `.github/workflows/ci.yml` 不变；将本机 `python` 缺失和 mock 命令缺 workflow 参数分别作为环境与 Runbook 文档缺口记录，不扩展为 AIO-6/7/8/9 实现。
+
+### Guard added
+
+后续本地 CI 等价复验在隔离环境执行；Engine mock 运行始终显式传入 workflow 路径和 `--mock`，避免意外触发真实 driver/Plane handler。
+
+### Recovery milestone
+
+取得独立 QA 的 `accept` verdict；失败则在剩余 2 轮预算内处理 AIO-5 范围内的问题，缺少独立 QA 能力则如实标记 `BLOCKED_NEEDS_HUMAN`。
+
+---
+
+### 2026-07-28 — AIO-5 垂直切片：独立 QA（Independent QA）
+
+[Goal check] 本阶段推进闭环「Independent QA」，证据 = AC 静态预检结果、实际 QA driver 配置检查及不可满足时的显式 reject verdict。
+
+**Status:** Detected
+
+### Intended outcome
+
+由独立的 Engine `verify` 节点（llm/hermes）或另一 agent/人对 CI 变更给出 `accept`/`reject` verdict；QA 只判断，不修复。
+
+### Observed divergence
+
+AC 的静态预检全部通过，但当前会话没有可用的 LLM 或 Hermes QA driver，且没有另一位独立 QA 审核者。不能把同一执行者的复查或 `--mock` 中预置的 accept 当成独立 QA。
+
+### Evidence
+
+- AC 静态预检输出：`{"acceptance_precheck":{"workflow_exists":true,"push_trigger":true,"pull_request_trigger":true,"dependency_install":true,"engine_test_command":true,"python_311":true},"all_pass":true}`。
+- 环境可用性检查（不暴露凭据）：`XY_LLM_BASE_URL`、`XY_LLM_API_KEY`、`XY_LLM_MODEL`、`HERMES_API_URL`、`HERMES_API_KEY`、`HERMES_MODEL` 均为 `UNSET`。
+- `src/ticket_autopilot/workflows/ticket-pipeline-hermes.yaml` 的 `verify` 节点使用 `verifier`，其 driver 为 `hermes` 且要求 JSON verdict；真实运行会在缺少 gateway/凭据时失败。`--mock` 的预置 reject/accept 仅测试控制流，非独立审查。
+- 本阶段 verdict（仅记录，不覆盖现有 AIO-4 的 `qa-verdict.json`）：
+  ```json
+  {"schema_version":"1.0","issue_key":"AIO-5","qa_attempt":1,"decision":"reject","reason":"BLOCKED_NEEDS_HUMAN: no configured independent llm/hermes QA driver and no separate reviewer","acceptance_precheck":"pass","deterministic_verification":"pass"}
+  ```
+
+### Facts versus inference
+
+**Facts:** CI 结构检查和确定性测试均通过；当前环境未配置可调用的独立 QA driver；仓库已有的 Engine mock verdict 是确定性 fixture，不是独立判断。
+
+**Inferences:** 配置 AIO-7 所规划的独立 QA connector，或由人类/另一 agent 审核此 diff，能够解除该门禁；在未实际运行前不应宣称其会 accept。
+
+### Impact
+
+AIO-5 未能获得 Independent QA 的 accept，因此不得进入 PR 创建或 Plane 状态更新。此为能力/授权缺口，而非可通过修改 CI YAML 修复的问题。
+
+### Correction or explicit reprioritization
+
+`BLOCKED_NEEDS_HUMAN`。不消耗剩余修复预算去重建 AIO-7：那会违反本票「只复用」与 out-of-scope 约束。请求人类提供独立审阅，或显式授权并配置已存在的 LLM/Hermes QA 服务。
+
+### Guard added
+
+拒绝把同一 agent 的静态复核、mock fixture、或测试绿灯冒充为独立 QA verdict；不修改 AIO-7 QA connector、不新增 QA 平台。
+
+### Recovery milestone
+
+独立审核者对同一 diff 给出 `decision: accept` 并附 AC 证据后，才可在人工 git gate 下创建 feature branch/commit/草稿 PR；随后由授权的 Plane MCP 更新 AIO-5/候选工单状态。
+
+---
+
+### 2026-07-28 — AIO-5 垂直切片：PR（Pull Request）
+
+[Goal check] 本阶段推进闭环「Pull Request」：证据 = 已验证的本地 diff 已就绪、但因 QA reject 与人工 git gate 未满足而未创建提交、push 或 PR。
+
+**Status:** Detected
+
+### Intended outcome
+
+在 feature branch 上准备本地 commit，等待人类明确批准后才 push 并创建 draft PR；绝不 push `main`、绝不自动 merge。
+
+### Observed divergence
+
+PR 前置的 Independent QA verdict 为 `reject/BLOCKED_NEEDS_HUMAN`，且尚未取得针对 git 写操作的人工批准。因此没有进入 branch/commit/push/`gh pr create` 操作。
+
+### Evidence
+
+- 工作区交付物：未跟踪 `.github/workflows/ci.yml` 与已修改 `logs/goal-drift.md`；确定性验证证据见本日志前两段。
+- 本次会话未执行 `git switch -c`、`git commit`、`git push`、`gh pr create` 或任何 merge 命令。
+- 起始分支为 `main...origin/main [ahead 9]`；因此即使 QA 通过，也必须先经人工批准使用隔离 feature branch，不能直接 push main。
+
+### Facts versus inference
+
+**Facts:** 没有 PR URL、commit SHA 或远端 CI run；QA verdict 未 accept。
+
+**Inferences:** 在独立 QA accept 和人工批准后，可用原生 `gh` CLI 创建 draft PR，并由 GitHub Actions 提供远端 CI 证据。
+
+### Impact
+
+PR 阶段安全地停在人工门禁前；AIO-5 的 Definition of Done 中「PR 已建或人工门禁下 diff 就绪 + 决策已记录」的替代路径已具备 diff/决策证据，但完整闭环仍未完成。
+
+### Correction or explicit reprioritization
+
+保持本地 diff，不创建提交或 PR。等待独立 QA accept 后，请人类明确授权创建 `slice/aio5-ci` 分支和本地 commit；再单独授权 push/draft PR。
+
+### Guard added
+
+PR 必须同时满足独立 QA accept、显式人类 git 授权和 feature branch；禁止自动 push main/merge。
+
+### Recovery milestone
+
+得到独立 QA accept 和人类 git 授权后，记录 feature branch、commit SHA、draft PR URL 与 GitHub Actions run 结果。
+
+---
+
+### 2026-07-28 — AIO-5 垂直切片：工单状态更新（Status Update）
+
+[Goal check] 本阶段推进闭环「Ticket Status Update」：证据 = 前置 PR/QA 门禁和本会话 Plane 写入能力状态已核对，未执行不安全的状态变更。
+
+**Status:** Detected
+
+### Intended outcome
+
+PR 就绪并有独立 QA accept 后，使用 Plane MCP 将候选工单及 AIO-5 推进到 In Review，并在工单中关联 PR 和证据。
+
+### Observed divergence
+
+不存在 PR，也没有 QA accept；此外，此会话工具面未暴露 Plane MCP 写入函数。不能以用户提供的旧状态信息、Engine mock 的 `closed: true` 或本地日志代替真实 Plane 写入成功。
+
+### Evidence
+
+- 本日志 PR 段无 PR URL/commit SHA；Independent QA 段 verdict 为 `reject/BLOCKED_NEEDS_HUMAN`。
+- 本会话可用工具仅提供本地文件/命令操作，未提供 Plane MCP 调用；未尝试 API 绕过或手工伪造状态更新。
+- Engine mock 输出的 `closed: true` 已在本日志有明确标注为 mock，不是 Plane 状态证据。
+
+### Facts versus inference
+
+**Facts:** 未对 Plane 执行读/写操作，故没有新的 Plane 状态或评论证据。
+
+**Inferences:** 获得 PR 和独立 QA 后，具备 Plane MCP 写入权限的授权会话可按 Runbook 更新工单；AIO-8 的参数化 Plane→PR 连接器仍是应单独处理的自动化缺口。
+
+### Impact
+
+工单状态维持不变；这避免了在未满足闭环证据门槛时错误标记 In Review/Done。
+
+### Correction or explicit reprioritization
+
+`BLOCKED_NEEDS_HUMAN`，等待独立 QA、PR 人工 gate 和可用的授权 Plane MCP 会话。只记录缺口给 AIO-7（独立 QA）与 AIO-8（Plane→PR/status glue），不在 AIO-5 实现它们；AIO-6 drivers 专属测试与 AIO-9 强制护栏亦保持 out of scope。
+
+### Guard added
+
+Plane 状态更新要求真实 PR URL、独立 QA accept 和授权 MCP 写入回执；mock 输出和本地自报一律不构成状态更新证据。
+
+### Recovery milestone
+
+在授权会话中把 PR 链接和确定性/QA 证据写入 Plane，并记录实际状态、时间戳及链接；AIO-5 仅在证据齐全后由人类置 Done。
+
+## 2026-07-29 — AIO-7 实现路径与工单原文的三处偏离（用户拍板，非漂移放任）
+
+**Status:** Detected, user-approved, merged back into AIO-7 scope
+
+### What happened
+
+会话从「qodercli 做 QA agent」的口头需求出发，先后实现了双 agent 互备与角色重排，
+偏离了 Plane AIO-7 工单原文（tasks/AIO-007-dev-prompt.md）。经对照检查后由用户逐项拍板，
+将偏离收敛回 AIO-7 的承重契约（qa-verdict schema + 无伪成功门禁 + connector 接入）。
+
+### Deviations（均经用户确认）
+
+1. **QA agent 是 qodercli 而非 codex**：工单原文要求 codex 做 Verify 独立 QA；用户决定
+   codex 改任 planner，QA 由 qodercli 承担且不设备份。独立性不变（QA 独立于开发 agent
+   claude/pi）。connector 因此命名为 `connectors/qa.py`（非 codex_qa.py）。
+2. **engine.py 新增 `_run_node` fallback**：工单要求「不改循环语义」。fallback 是 driver
+   调用外层的附加 try/except（主 agent 失败→备份 agent 一次→双失败照常抛错），未触碰
+   `when`/loop/readiness/max_retries。用户知情并要求保留（executor claude→pi 互备依赖它）。
+3. **schema 校验为零依赖手写子集而非 jsonschema 库**：环境未安装 jsonschema，且项目
+   dependencies=[] 是刻意约束（llm driver 用 urllib 同理）。校验覆盖 type/required/
+   properties/items/enum，足够 §9.1 契约；单测覆盖畸形输出一律 reject(BLOCKED)。
+
+### Bug found and fixed during merge
+
+Engine 存在真实门禁缺陷：所有节点初始 stale=True，导致 `close` 在 verify 首次 reject 后
+即运行（mock log 实证：close 出现在第 5 步，早于最终 accept）。修复：入边全部带 `when`
+的节点初始不置 stale，必须等条件边真正触发。此前「COMPLETED 含 close」掩盖了该缺陷；
+新增回归测试 test_schema_invalid_pass_never_reaches_close。
+
+### Evidence
+
+- 40 unittest 全绿（schema 校验 8、connector 无伪成功 7、端到端门禁 2、既有 23 不回归）。
+- 两个 workflow mock 运行的节点序列均为 plan→(execute→verify)x3→close，close 仅在
+  accept 后出现。
+- 无伪成功不变量：仅「schema 合法且 verdict==PASS」产生 accept；CLI 失败/非 JSON/校验
+  不过 → reject + BLOCKED verdict（本身 schema 合法，可归档）。
+
+### Guard added
+
+到达 close 的充要条件由引擎结构性保证（条件门控节点不再初始就绪），不再依赖 QA 输出
+的自觉；qa-verdict 未过 schema 校验绝不映射为 accept。

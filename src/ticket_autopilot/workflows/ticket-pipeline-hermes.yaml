@@ -16,6 +16,7 @@ name: ticket-pipeline-hermes
 vars:
   max_retries: 5          # QA retry cap. User: real manual max seen = 7;
                           # use 5; usually passes in 1-2 retries.
+  ticket_context: ""      # stub — AIO-8 connector fills this from the Plane ticket
 
 agents:
   planner:
@@ -32,11 +33,10 @@ agents:
       sandbox (read-only, designated directory) enforced by the caller.
 
   verifier:
-    driver: hermes
-    expect: json
-    system: |
-      You are the Verifier. Compare the plan against the execution result.
-      Reply with ONLY a JSON object: {"decision":"accept"|"reject","reason":"..."}
+    driver: script
+    entry: qa                      # independent QA stays outside the hermes
+                                   # backend: handlers/qa.py -> connectors/qa.py
+                                   # (qodercli read-only + qa-verdict schema gate)
 
   closer:
     driver: script
@@ -66,6 +66,7 @@ nodes:
     inputs:
       plan: ${nodes.plan}
       result: ${nodes.execute}
+      ticket_context: ${vars.ticket_context}
 
   - id: close
     agent: closer

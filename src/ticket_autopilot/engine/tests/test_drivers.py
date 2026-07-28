@@ -101,6 +101,98 @@ class TestCliDriver(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["cwd"], os.path.join(PKG_ROOT, "sandbox"))
 
     @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
+    def test_builds_qodercli_qa_command_with_variadic_tools(self, run):
+        run.return_value = mock.Mock(
+            returncode=0, stdout='{"decision": "accept", "reason": "ok"}\n', stderr=""
+        )
+        agent = {
+            "driver": "cli",
+            "command": "qodercli",
+            "cwd": "sandbox",
+            "permission_mode": "default",
+            "tools": ["Read", "Glob", "Grep"],
+            "tools_flag": "--tools",
+            "tools_as_args": True,
+            "extra_args": ["--no-session-persistence"],
+            "expect": "json",
+            "system": "reply with a JSON verdict",
+        }
+
+        result = drivers.cli_call(
+            agent, {"plan": "p", "result": "r"}, {"agent": "verifier"}, PKG_ROOT
+        )
+
+        self.assertEqual(result, {"decision": "accept", "reason": "ok"})
+        command = run.call_args.args[0]
+        self.assertEqual(command[0], "qodercli")
+        self.assertEqual(command[command.index("--permission-mode") + 1], "default")
+        tools_at = command.index("--tools")
+        self.assertEqual(command[tools_at + 1:tools_at + 4], ["Read", "Glob", "Grep"])
+        self.assertNotIn("--allowedTools", command)
+        self.assertIn("--no-session-persistence", command)
+        self.assertEqual(run.call_args.kwargs["cwd"], os.path.join(PKG_ROOT, "sandbox"))
+
+    @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
+    def test_argv_template_substitutes_placeholders_codex_style(self, run):
+        run.return_value = mock.Mock(returncode=0, stdout="a plan\n", stderr="")
+        agent = {
+            "driver": "cli",
+            "cwd": "sandbox",
+            "argv": ["codex", "exec", "-s", "read-only", "-C", "{cwd}",
+                     "--ephemeral", "{prompt}"],
+        }
+
+        result = drivers.cli_call(agent, {"ticket_id": "AIO-9"}, {"agent": "planner"}, PKG_ROOT)
+
+        self.assertEqual(result, "a plan")
+        command = run.call_args.args[0]
+        self.assertEqual(command[:4], ["codex", "exec", "-s", "read-only"])
+        self.assertEqual(command[command.index("-C") + 1], os.path.join(PKG_ROOT, "sandbox"))
+        self.assertEqual(command[-1], "ticket_id: AIO-9")
+        self.assertNotIn("--permission-mode", command)
+
+    @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
+    def test_argv_template_fills_system_placeholder_pi_style(self, run):
+        run.return_value = mock.Mock(returncode=0, stdout="done\n", stderr="")
+        agent = {
+            "driver": "cli",
+            "cwd": "sandbox",
+            "argv": ["pi", "-p", "--tools", "read", "--no-session",
+                     "--append-system-prompt", "{system}", "{prompt}"],
+            "system": "read only",
+        }
+
+        drivers.cli_call(agent, {"plan": "p"}, {"agent": "executor"}, PKG_ROOT)
+
+        command = run.call_args.args[0]
+        self.assertEqual(command[command.index("--append-system-prompt") + 1], "read only")
+        self.assertEqual(command[-1], "plan: p")
+
+    @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
+    def test_argv_without_system_placeholder_prepends_system_to_prompt(self, run):
+        run.return_value = mock.Mock(returncode=0, stdout="ok\n", stderr="")
+        agent = {
+            "driver": "cli",
+            "cwd": "sandbox",
+            "argv": ["codex", "exec", "{prompt}"],
+            "system": "You are the Planner.",
+        }
+
+        drivers.cli_call(agent, {"ticket_id": "AIO-9"}, {"agent": "planner"}, PKG_ROOT)
+
+        command = run.call_args.args[0]
+        self.assertEqual(command[-1], "You are the Planner.\n\nticket_id: AIO-9")
+
+    @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
+    def test_argv_agent_still_rejected_outside_sandbox(self, run):
+        with self.assertRaises(drivers.SecurityError):
+            drivers.cli_call(
+                {"driver": "cli", "cwd": "/etc", "argv": ["codex", "exec", "{prompt}"]},
+                {}, {"agent": "planner"}, PKG_ROOT,
+            )
+        run.assert_not_called()
+
+    @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
     def test_rejects_outside_sandbox_before_spawning(self, run):
         with self.assertRaises(drivers.SecurityError):
             drivers.cli_call(
@@ -158,6 +250,60 @@ class TestHermesDriver(unittest.TestCase):
         hermes_call.assert_called_once_with(
             workflow["agents"]["worker"], {"ticket": "AIO-6"}, workflow["nodes"][0], mock=False
         )
+
+
+class TestAgentFallback(unittest.TestCase):
+    def _workflow(self, primary, backup=None):
+        agents = {"primary": primary}
+        if backup is not None:
+            agents["backup"] = backup
+        return {
+            "agents": agents,
+            "nodes": [{"id": "work", "agent": "primary", "inputs": {"ticket": "AIO-9"}}],
+            "edges": [],
+        }
+
+    @mock.patch("ticket_autopilot.engine.drivers.hermes_call")
+    @mock.patch("ticket_autopilot.engine.drivers.cli_call")
+    def test_primary_failure_runs_backup_once(self, cli_call, hermes_call):
+        cli_call.side_effect = RuntimeError("qodercli down")
+        hermes_call.return_value = {"decision": "accept"}
+        events = []
+        workflow = self._workflow(
+            {"driver": "cli", "fallback": "backup"}, {"driver": "hermes"}
+        )
+
+        result = engine.Engine(
+            workflow,
+            hooks={"on_fallback": lambda *a: events.append(a)},
+        ).run()
+
+        self.assertEqual(result["outputs"]["work"], {"decision": "accept"})
+        cli_call.assert_called_once()
+        hermes_call.assert_called_once()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0][1:3], ("primary", "backup"))
+
+    @mock.patch("ticket_autopilot.engine.drivers.hermes_call")
+    @mock.patch("ticket_autopilot.engine.drivers.cli_call")
+    def test_both_failing_propagates_backup_error(self, cli_call, hermes_call):
+        cli_call.side_effect = RuntimeError("qodercli down")
+        hermes_call.side_effect = RuntimeError("gateway down")
+        workflow = self._workflow(
+            {"driver": "cli", "fallback": "backup"}, {"driver": "hermes"}
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "gateway down"):
+            engine.Engine(workflow).run()
+
+    @mock.patch("ticket_autopilot.engine.drivers.cli_call")
+    def test_without_fallback_reraises_immediately(self, cli_call):
+        cli_call.side_effect = RuntimeError("claude down")
+        workflow = self._workflow({"driver": "cli"})
+
+        with self.assertRaisesRegex(RuntimeError, "claude down"):
+            engine.Engine(workflow).run()
+        cli_call.assert_called_once()
 
 
 class TestScriptDriver(unittest.TestCase):

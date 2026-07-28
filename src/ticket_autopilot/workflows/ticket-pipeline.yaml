@@ -21,10 +21,24 @@ name: ticket-pipeline
 vars:
   max_retries: 5          # QA retry cap. User: real manual max seen = 7;
                           # use 5; usually passes in 1-2 retries.
+  ticket_context: ""      # stub — AIO-8 connector fills this from the Plane ticket
 
 agents:
   planner:
-    driver: llm
+    driver: cli
+    cwd: ./sandbox                 # strict: designated directory
+    argv:                          # codex exec: positional prompt, native sandbox
+      - codex
+      - exec
+      - -s
+      - read-only
+      - -C
+      - "{cwd}"
+      - --ephemeral
+      - --skip-git-repo-check
+      - --color
+      - never
+      - "{prompt}"
     system: |
       You are the Planner. Read the ticket and write a concise implementation
       plan (what to change, which files, how to verify).
@@ -34,6 +48,7 @@ agents:
     command: claude
     cwd: ./sandbox                 # strict: designated directory
     permission_mode: read-only     # strict: read-only
+    fallback: executor-backup      # pi takes over if claude fails
     tools:                         # allowlist (no write tools)
       - Read
       - Glob
@@ -41,12 +56,27 @@ agents:
     system: |
       You are the Executor. Implement the plan using only the allowed tools.
 
-  verifier:
-    driver: llm
-    expect: json
+  executor-backup:
+    driver: cli
+    cwd: ./sandbox                 # strict: designated directory
+    argv:                          # pi: no permission mode; read-only via tools allowlist
+      - pi
+      - -p
+      - --tools
+      - read
+      - --no-session
+      - --append-system-prompt
+      - "{system}"
+      - "{prompt}"
     system: |
-      You are the Verifier. Compare the plan against the execution result.
-      Reply with ONLY a JSON object: {"decision":"accept"|"reject","reason":"..."}
+      You are the Executor. Implement the plan using only the allowed tools.
+
+  verifier:
+    driver: script
+    entry: qa                      # handlers/qa.py -> connectors/qa.py:
+                                   # qodercli (read-only tools, one-shot session)
+                                   # -> qa-verdict schema validation
+                                   # -> only schema-valid PASS maps to accept
 
   closer:
     driver: script
@@ -76,6 +106,7 @@ nodes:
     inputs:
       plan: ${nodes.plan}
       result: ${nodes.execute}
+      ticket_context: ${vars.ticket_context}
 
   - id: close
     agent: closer

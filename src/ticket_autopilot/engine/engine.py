@@ -93,7 +93,17 @@ class Engine:
         completed: set[str] = set()
         fired: set[int] = set()
         retry_count: dict[int, int] = {}
-        stale: dict[str, bool] = {nid: True for nid in node_ids}
+        # Gate defect guard: a node whose incoming forward edges ALL carry a
+        # `when` must wait for one of those edges to actually fire; starting
+        # it stale would run it as soon as its needs complete (e.g. close
+        # would run even on a reject verdict).
+        gated = set()
+        for nid in node_ids:
+            incoming = [e for e in self.edges
+                        if e["to"] == nid and e.get("kind", "forward") == "forward"]
+            if incoming and all(e.get("when") is not None for e in incoming):
+                gated.add(nid)
+        stale: dict[str, bool] = {nid: nid not in gated for nid in node_ids}
 
         log: list[dict] = []
         step = 0
@@ -164,13 +174,25 @@ class Engine:
             # no-agent node: pass inputs through as output
             return inputs
         agent = self.agents[agent_name]
-        driver = agent.get("driver", "script")
 
         if self.mock:
             # driver-agnostic canned output (honors `reject_times` so the
             # verify->execute loop can be exercised headless for any driver).
             return self._mock_output(node, agent_name)
 
+        try:
+            return self._dispatch(agent, inputs, node)
+        except Exception as exc:
+            fallback_name = agent.get("fallback")
+            if not fallback_name:
+                raise
+            # backup agent runs once; if it also fails, the error propagates
+            # (BLOCKED, never a fabricated result).
+            self._fire_hook("on_fallback", node, agent_name, fallback_name, exc)
+            return self._dispatch(self.agents[fallback_name], inputs, node)
+
+    def _dispatch(self, agent, inputs, node) -> object:
+        driver = agent.get("driver", "script")
         if driver == "llm":
             return drivers.llm_call(agent, inputs, node)
         if driver == "cli":
