@@ -20,10 +20,15 @@ Conceptually **Ticket Autopilot** — a lightweight local controller that turns 
 - `tooling/start-prompt/` — **parked** prompt-source + eval (`core/` `modules/` `platform/` `eval/`; `eval/build_v5.py` reads `core`/`modules` as siblings of `eval`).
 - `tooling/codex-notification-setup/` — parked codex infra config.
 - `specs/` `research/` `logs/` `tasks/` `tests/` — spec doc, research notes, goal-drift log, Chinese task list, top-level product tests.
+- ⚠️ **STALE doc**: `tasks/ticket-autopilot-v0.1-tasklist.md` (T0–T19) describes the **OLD `ticket_controller` package** (Linear/GitHub/Claude/Codex adapters per the v0.1 spec) — **NOT** the current Engine + Connector architecture. Do NOT use it as architecture reference. The real architecture lives in Plane issues #1–#9 + `src/ticket_autopilot/`. AIO-2 ("定义并接通闭环工单工作流") is Plane issue #2, grounded in the new architecture.
 - `pyproject.toml` (src-layout, console `ticket-controller` = `ticket_autopilot.cli:main`), `.gitignore` (`.ticket-autopilot/`, `runs/`, `worktrees/`, `sandbox/*`, `.env`).
 
-## Naming convention (locked 2026-07-28)
+## Naming convention (locked 2026-07-28, rationale preserved)
 - **Product** = "Ticket Autopilot"; **Engine** = the orchestration core (`src/ticket_autopilot/engine/`); **Connector** = the glue layer (`src/ticket_autopilot/connectors/`, ex-`adapters/`). Legacy "Vivarium Forge Flow" / `vff` / `forge_flow` naming fully removed from code+docs on 2026-07-28.
+- **Why "Connector" not "Handler"**: Handler = fine-grained single-step function, AND collides with engine's internal `engine/handlers/` (YAML `script` node step processors). Connector = precise interface-adaptation semantics, zero collision. Code already uses it (`adapters/` → `connectors/`).
+- **Why Engine merged into the product package**: there were TWO things both named "Ticket Autopilot" — the standalone engine folder (ex Vivarium Forge Flow / `vff`) and the top-level product skeleton `src/ticket_autopilot/`. Decision: absorb the engine as `engine/` so the whole product = Engine + Connector + business services, eliminating the "two Ticket Autopilots" ambiguity.
+- **Two easy-to-confuse `ticket-autopilot`**: `src/ticket_autopilot/` = source package; `.ticket-autopilot/` (in specs/tasklist) = runtime dotfolder (worktree/run dir), spec-defined and intentionally kept. They are NOT the same thing.
+- **Engine role (one-liner)**: a declarative YAML-driven closed-loop agent orchestrator — reads a workflow YAML, builds a DAG, drives Plan→Execute→Verify→Close, auto-reruns Execute on Verify-reject up to `max_retries` (default 5), with strict CLI sandboxing. Ticket source is pluggable (Plane now, Linear/GitHub later).
 
 ## Future plan: open-source Ticket Autopilot
 - Product lives in `src/ticket_autopilot/`; to open-source later, publish that package (Engine + Connector + reference) as a standalone GitHub repo, separate from this `AI-Operations` meta-repo.
@@ -31,3 +36,10 @@ Conceptually **Ticket Autopilot** — a lightweight local controller that turns 
 ## Conventions / preferences
 - Reply in Chinese for this user; git write ops need explicit approval.
 - Goal-drift log + mandatory [Goal check] line at start of each piece of work (see AGENTS.md).
+
+## 工作方式约定（2026-07-28 明确）
+- **PM agent 角色边界**：只做任务拆解 + 写 Plane 工单，**不写实现代码**；具体工作交执行 agent。
+- **本项目 dogfood Engine 流程**：自动化 Engine 建成前，由用户**手动当 Engine**——读 Plane 工单 → 驱动执行 agent 跑 Plan→Execute→Verify→Close → 关单/建 PR。
+- **Plane 工单格式** = `specs/agent-ready-ticket-template.md`（9 字段：标题/目标/范围边界/验收标准/验证方式/依赖/Done 定义/风险回滚/人工点位）。
+- **AIO 提示词交付约定（扁平化 2026-07-28）**：每个 AIO 票的开发/验收提示词写成 `tasks/AIO-00<N>-dev-prompt.md` 与 `tasks/AIO-00<N>-acceptance-prompt.md`（单层文件、零填充 3 位、不分子目录，省文件夹）。`AIO-00<N>` 对应 Plane 项目 Ticket Autopilot/AIO 的 issue #<N>。两提示词格式锚定 AIO-002（`AIO-002-dev-prompt.md`/`AIO-002-acceptance-prompt.md`），含 [Goal check]、AC-1..、确定性验证命令、复用优先硬约束、禁止用旧 `tasks/ticket-autopilot-v0.1-tasklist.md` 作架构依据。非约定文件保留：`ticket-autopilot-qoderwake-prompt.md`（QoderWake 专用，待定是否并入）、`ticket-autopilot-v0.1-tasklist.md`（STALE，勿作架构依据）。目前已有提示词的票：#1/#2/#3/#6/#7/#8/#9；#4/#5 暂无（按需补）。
+- **护栏边界（跨票）**：CLI 沙箱/只读/白名单逻辑在 `engine/drivers.py::cli_call`，实现雏形已存在；**增强**归 AIO-9（安全护栏），其余 AIO 票（如 AIO-6 drivers）只测/留不增强。

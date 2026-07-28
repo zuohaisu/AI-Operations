@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0",
+  "issue_key": "AIO-1",
+  "run_id": "aio-1-qa-20260728-120000",
+  "qa_attempt": 1,
+  "verdict": "PASS",
+  "acceptance_criteria": [
+    {
+      "id": "AC-1",
+      "status": "PASS",
+      "evidence": [
+        "research/capability-audit.md L23-L33「7 阶段映射」表覆盖全部 7 阶段：工单接入与契约 / 计划 Plan / 执行开发 Execute / 确定性验证与独立 QA / 有界修复循环 / PR 与 CI 证据 / 工单状态与结果",
+        "L35-L40「横切关注」表覆盖 2 横切：人工 Review/Merge 安全门、安全边界",
+        "全部 9 行均含「已有能力（证据）/ 缺口 / 最小胶水建议」三列，逐行检查无空白、无 TBD"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "status": "PASS",
+      "evidence": [
+        "E1：engine.py L81-L86 forward needs、L145-L157 when/max_retries、L156-L157 loop 后置 stale 重跑 — Read 核验属实",
+        "E2：drivers.py 四 driver（llm L63 / hermes L106 / cli L157 / script L185）；_resolve_within_root L146-L154 抛 SecurityError；permission_mode 默认 read-only L162；--allowedTools L169 — 属实",
+        "E3：ticket-pipeline.yaml 与 ticket-pipeline-hermes.yaml 均含 plan/execute/verify/close + reject loop（when nodes.verify.decision == 'reject'，max_retries ${vars.max_retries}，vars.max_retries=5）；标准版 driver 为 llm/cli/llm/script，Hermes 版前三节点 driver: hermes — 属实",
+        "E4：close_ticket.py L19 import plane_client，L24-L25 add_comment + set_state(done)；grep 全 src 确认它是唯一 import plane_client 的 engine handler — 属实",
+        "E5：plane_client.py 含 list_issues/get_issue/create_issue/set_state/add_comment/delete_issue；X-API-Key L56、BROWSER_UA L35-L36、PATCH 用 state 字段 L98-L99 — 属实",
+        "E6：/usr/bin/python3 -m unittest discover -s src/ticket_autopilot/engine/tests -v → Ran 7 tests, OK（本次 QA 复跑确认）",
+        "E7：gh 2.92.0 已安装；gh auth status 已登录（scopes read:org, repo, workflow）；仓库无 .github/ 目录 — 属实",
+        "E8：connectors/services/schemas 三目录各仅一个 __init__.py（ls -la 核验）— 属实",
+        "E9：cli.py L26-L27 打印 [stub] 且注释 TODO(T1/T16): wire to controller — 属实",
+        "E10：reference/ticket-pipeline/README.md L71-L72 记录 Cloudflare 403 error 1010 / 浏览器 UA 绕过，与文档断言一致 — 属实",
+        "文档第 51 行对 MCP 能力明确声明「未进行 MCP 调用验证」而非断言可用，无「应可用」式无证据断言；未发现任何虚构引用"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "status": "PASS",
+      "evidence": [
+        "L66-L76「不新建平台的结论」明确列出复用范围（Engine DAG、drivers、Plane REST client、gh/Actions、GitHub PR+branch protection）与仅需薄 Connector/deterministic services 的自定义范围",
+        "与 IDEA.md/AGENTS.md 复用优先架构顺序一致；显式声明「不要新建第二个 controller 或持久化平台」"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "status": "PASS",
+      "evidence": [
+        "L53-L64 已知坑表 P1-P8，覆盖全部 6 项必查坑：P1 plane_client PROJECT_ID 错位（硬编码 5c5c7207-... vs AIO 项目 d40168f5-...，与源码 L23 及 tasks/AIO-*-dev-prompt.md 交叉核验一致）、P2 MCP 403 UA、P3 Verifier≠Codex QA、P4 PR 未实现、P5 CLI stub、P6 空脚手架",
+        "每条均给出最小胶水/处理建议，无只列坑不给建议的行；额外 P7/P8 亦有证据支撑（close 边 when accept、retry cap 5）"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "status": "PASS",
+      "evidence": [
+        "纯审计文档：git status 语义上无新增 src/ 业务代码指示，文档头部 L3 明确「仅审计，不实现」",
+        "原则与 AGENTS.md/IDEA.md 无矛盾：复用优先（L66-L76）、不建平台、绝不自动 merge（L39、L74）、未对 Plane 发起写请求（E10 声明 R0 下未调用）"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "status": "PASS",
+      "evidence": [
+        "L78-L86「下一步最小胶水优先级」给出有序清单：AIO-2 契约 → AIO-6 Plane Connector → AIO-7 确定性验证+独立 QA → AIO-8 PR/CI → CLI 接线，可被后续票直接引用",
+        "收尾给出真实低风险 R0 ticket 纵向切片验证策略，失败标 BLOCKED 不标成功，符合 no-false-success"
+      ]
+    }
+  ],
+  "findings": [],
+  "non_blocking_comments": [
+    "L8 称「路径均以 test -f 核验」，但证据表内多数条目实际标注为 Read/命令核验；表述不完全一致，不影响可核验性（QA 已逐条独立复验全部路径真实存在）。",
+    "E6 如实记录了指定命令 `python -m ...` 在本机退出 127（无 python 可执行文件）并以 /usr/bin/python3 完成同一测试发现；QA 复跑确认 7/7 绿，视为满足测试门禁。"
+  ],
+  "recommended_next_state": "READY_FOR_HUMAN_REVIEW"
+}

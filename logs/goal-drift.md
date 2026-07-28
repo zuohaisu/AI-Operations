@@ -16,12 +16,14 @@ existing hooks, MCP capabilities, GitHub Actions, and platform-native automation
 small custom system was acceptable only if those capabilities could not close the
 loop.
 
-### What happened
+### Observed divergence
 
 The work increasingly treated universal Start Prompt design and Start Prompt
 comparison as the center of the project. The repository gained a substantial prompt
 source tree, evaluation harness, and research track, while the ticket automation
 remained a specification rather than an implemented vertical slice.
+
+### Evidence
 
 Repository evidence at detection time:
 
@@ -35,16 +37,13 @@ Repository evidence at detection time:
 - Root `IDEA.md` and `AGENTS.md` only described a broad AI operating-system project,
   which was too vague to reject adjacent work.
 
-### Classification
+### Facts versus inference
 
-The Start Prompt work was not inherently useless. It was a potentially reusable
-supporting asset. The drift occurred because it became the active product goal without
-an explicit priority decision and did not produce evidence that a real ticket could
-move further through the delivery loop.
+**Facts:** The Start Prompt work was a potentially reusable supporting asset, but it
+became the active product goal without an explicit priority decision and did not
+produce evidence that a real ticket could move further through the delivery loop.
 
-### Likely causes
-
-These are inferences, not directly observed facts:
+**Inferences:** Likely causes (not directly observed facts):
 
 1. The project-level goal was written too broadly to distinguish core product work
    from interesting AI-agent infrastructure.
@@ -63,7 +62,7 @@ These are inferences, not directly observed facts:
   primary closed-loop hypothesis.
 - Project memory began reinforcing the drift for subsequent AI sessions.
 
-### Correction decision
+### Correction or explicit reprioritization
 
 1. Restore ticket-driven automated development as the project North Star.
 2. Park Start Prompt research and comparison as a supporting track; preserve its
@@ -73,7 +72,7 @@ These are inferences, not directly observed facts:
 4. Build only the smallest missing orchestration needed for one real, low-risk ticket
    to reach an evidence-backed Pull Request and ticket result.
 
-### Guard now in place
+### Guard added
 
 - `IDEA.md` is the concise project charter and priority source.
 - `AGENTS.md` requires a visible goal check before research, planning, or
@@ -96,11 +95,36 @@ is runtime evidence from the ticket loop, not another framework or prompt artifa
 
 **Status:** Detected / Corrected / Accepted reprioritization
 
-- Intended outcome:
-- Observed divergence:
-- Evidence:
-- Facts versus inference:
-- Impact:
-- Correction or explicit reprioritization:
-- Guard added:
-- Recovery milestone:
+### Intended outcome
+
+<The ticket-loop stage and measurable outcome that work was meant to advance.>
+
+### Observed divergence
+
+<What work actually focused on or produced instead.>
+
+### Evidence
+
+<Observable repository paths, commands, timestamps, issue links, or other facts.>
+
+### Facts versus inference
+
+**Facts:** <Observed facts only.>
+
+**Inferences:** <Interpretations, hypotheses, or likely causes; label uncertainty.>
+
+### Impact
+
+<Effect on the ticket loop, safety, schedule, or project priorities.>
+
+### Correction or explicit reprioritization
+
+<The corrective action, or the explicit decision approving a priority change.>
+
+### Guard added
+
+<The concrete rule, gate, or check that prevents recurrence.>
+
+### Recovery milestone
+
+<The evidence-backed ticket-loop outcome that demonstrates recovery.>

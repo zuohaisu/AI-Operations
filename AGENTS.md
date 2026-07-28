@@ -13,9 +13,10 @@ Ticket -> Development -> Deterministic Verification -> Independent QA
        -> Bounded Fix Loop -> Pull Request -> Ticket Status Update
 ```
 
-The authoritative project framing is in `IDEA.md`. The current fallback design is in
-`specs/Ticket Autopilot v0.1 Specification.md`. Goal-drift incidents are recorded in
-`logs/goal-drift.md`.
+The authoritative project framing is in `IDEA.md`. The authoritative operational
+closed-loop workflow definition is `docs/closed-loop-workflow.md`. The current fallback
+design is in `specs/Ticket Autopilot v0.1 Specification.md`. Goal-drift incidents are
+recorded in `logs/goal-drift.md`.
 
 ## Mandatory Alignment Check
 
