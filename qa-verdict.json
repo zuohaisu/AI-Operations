@@ -1,77 +1,72 @@
 {
   "schema_version": "1.0",
-  "issue_key": "AIO-2",
-  "run_id": "aio-2-qa-20260728-234500",
-  "qa_attempt": 2,
+  "issue_key": "AIO-6",
+  "run_id": "aio-6-qa-20260728-1",
+  "qa_attempt": 1,
   "verdict": "PASS",
   "acceptance_criteria": [
     {
       "id": "AC-1",
       "status": "PASS",
       "evidence": [
-        "docs/closed-loop-workflow.md L28-L36 表格覆盖全部 7 阶段，每阶段含四要素：负责实体+工具/命令（列2）、执行方式（列3）、证据门禁（列4）",
-        "阶段1：plane_client.py L79 def get_issue / L72 def list_issues 真实存在（grep 命中）；标注 Target connectors/plane.py『not yet present』且门禁标 BLOCKED，无虚构声称",
-        "阶段2：ticket-pipeline.yaml L61 id: plan / L27 driver: llm；hermes 版 L22/L29/L35 driver: hermes — 全部 grep 命中",
-        "阶段3：yaml L35-L37 cwd: ./sandbox + permission_mode: read-only + tools 白名单；drivers.py L29 SecurityError、L157 def cli_call、L162 read-only 默认、L166 --permission-mode、L169 --allowedTools — 全部命中",
-        "阶段4：两 yaml 均有 id: verify（L73/L63）、expect: json（L46/L36）、decision accept 边（L100/L90）；文档如实标注『LLM verdict 非确定性证据，独立 QA 属 AIO-7』",
-        "阶段5：两 yaml kind: loop（L95/L85）、when nodes.verify.decision == 'reject'（L96/L86）、max_retries ${vars.max_retries}（L97/L87）、vars.max_retries: 5（L22/L17）；engine.py L140 def _fire_edges 存在",
-        "阶段6：find src/ticket_autopilot/connectors -maxdepth 1 -type f 仅 __init__.py，与文档『No current GitHub Connector』一致，门禁标 BLOCKED",
-        "阶段7：close_ticket.py L24 pc.add_comment / L25 pc.set_state(ticket_id, \"done\") grep 命中；hard-coded project ID 风险与 research/capability-audit.md P1（L57）交叉一致",
-        "research/capability-audit.md 存在且被真实引用；未发现任何虚构引用"
+        "test_drivers.py 含 4 个 driver 各自独立单测类：TestLlmDriver（L31-L75，3 测）、TestCliDriver（L78-L110，2 测）、TestHermesDriver（L113-L160，3 测）、TestScriptDriver（L163-L169，1 测）",
+        "llm：L37/L60 @mock.patch('ticket_autopilot.engine.drivers.urllib.request.urlopen')，断言 URL/Bearer/model（L51-L53）、expect:json 含围栏容错（L61-L70）、缺 env 抛 RuntimeError（L72-L75）",
+        "cli：L79 mock subprocess.run，断言 --permission-mode read-only / --allowedTools / --cwd / cwd 拼接（L94-L101）；L103-L110 test_rejects_outside_sandbox_before_spawning 断言 cwd=/etc 抛 drivers.SecurityError 且 run.assert_not_called()",
+        "hermes：L114-L120 mock=True 返回 marker 且 urlopen.assert_not_called()；L146-L160 test_engine_routes_hermes_with_agent_inputs_and_node 以 mock.patch hermes_call 作路由 spy，断言 Engine 以 (agent, inputs, node, mock=False) 精确分发",
+        "script：L164-L169 调用 fixture handler handlers/_test_echo.py（无副作用回声函数），断言原样返回 inputs"
       ]
     },
     {
       "id": "AC-2",
       "status": "PASS",
       "evidence": [
-        "grep -n 'Goal check' docs/closed-loop-workflow.md 命中 3 处（L45 模板、L58 核验正则、L83 自检命令），L38-L51 为强制约定段落（every work segment must begin ... before any other substantive content）",
-        "可事后核验方式明确且非空话：L56-L59 给出 awk+grep -Ex 脚本；QA 实测正样本 exit=0、负样本 exit=1，行为符合声明",
-        "L48-L51 规定无法完成该行时停止并归类 side track，与 AGENTS.md L30-L31 一致"
+        "test_drivers.py L172-L180 TestDriverWorkflowDispatch.test_ticket_pipeline_runs_in_mock_mode：yaml.safe_load 加载 workflows/ticket-pipeline.yaml → Engine(workflow, mock=True).run({'ticket_id':'AIO-6'}) → 断言 'plan' in result['completed'] 且 outputs['plan'] == 'Mock plan for ${params.ticket_id}'",
+        "真跑确认该测试通过：test_ticket_pipeline_runs_in_mock_mode ... ok"
       ]
     },
     {
       "id": "AC-3",
       "status": "PASS",
       "evidence": [
-        "logs/goal-drift.md L92-L131 Entry template 逐字段与 2026-07-22 真实条目（L7-L88）结构一致：Status / Intended outcome / Observed divergence / Evidence / Facts versus inference / Impact / Correction or explicit reprioritization / Guard added / Recovery milestone，共 9 项无缺失",
-        "各字段含尖括号占位说明，可直接填写使用"
+        "engine/README.md L143-L159『Driver contract』表逐项与 drivers.py 一致核验：llm 需 XY_LLM_BASE_URL/XY_LLM_API_KEY/XY_LLM_MODEL（README L153 ↔ drivers.py L64-L66）；cli 默认 command=claude/cwd=sandbox/allowed_roots=[sandbox]/permission_mode=read-only、越界抛 SecurityError（L154 ↔ L157-L163、L150）；hermes HERMES_API_URL 默认 http://localhost:8642/v1、HERMES_MODEL 默认 hermes-agent、session_key 覆盖 HERMES_SESSION_KEY（L155 ↔ L112-L114、L127）；script 加载 handlers/<entry>.py 调 <entry>(**inputs)、entry 必填（L156 ↔ L185-L194）",
+        "YAML 字段：README L128 agents.<name>.driver ∈ llm|cli|hermes|script；L130 expect: json 解析（含 fenced json，L153 ↔ drivers.py L43-L56）",
+        "mock 开关：README L146-L149 声明 Engine(mock=True) 在分发前返回 canned output，real 模式对 hermes 恒传 mock=False（↔ engine.py L169-L172、L181）",
+        "未知 driver 契约：README L149『an unknown driver raises WorkflowError(\"unknown driver: <name>\")』↔ engine.py L184；未发现虚构或缺失字段"
       ]
     },
     {
       "id": "AC-4",
       "status": "PASS",
       "evidence": [
-        "docs/closed-loop-workflow.md L67-L74『Explicit exclusions』显式排除：resume、webhook triggers、parallel runs、automatic merge（另加 automatic deploy/migration/next-ticket）；grep 关键字全部命中",
-        "L71-L72『PRs remain subject to human review and merge』与 AGENTS.md 人工 merge 门一致"
+        "真跑（pytest 在本机 python3/python3.11 均未安装，按提示词回退命令）：PYTHONPATH=src python3 -m unittest discover -s src/ticket_autopilot/engine/tests -v → Ran 18 tests in 0.033s / OK / EXIT=0（test_drivers.py 11 测 + test_engine.py 原有 7 测全绿）",
+        "grep -n SecurityError src/ticket_autopilot/engine/drivers.py → 29:class SecurityError(Exception): / 150: raise SecurityError( — 护栏 intact",
+        "test_engine.py 唯一改动为 test_cwd_inside_allowed_root_is_allowed 改用 mock subprocess（确定性增强）；SecurityError 拒绝路径测试 test_cwd_outside_allowed_root_is_rejected 未动且仍绿，护栏语义未削弱"
       ]
     },
     {
       "id": "AC-5",
       "status": "PASS",
       "evidence": [
-        "AGENTS.md L16-L17 存在引用行：『The authoritative operational closed-loop workflow definition is docs/closed-loop-workflow.md』",
-        "无矛盾：文档 L10-L19 复用优先（复用 Engine/plane_client，Do not replace the Engine）、L35 不实现 GitHub 平台仅预留集成点、L71 不自动 merge、L86-L88 失败即 BLOCKED 不虚报成功 — 均与 AGENTS.md 架构顺序及 IDEA.md 一致",
-        "grep 'tasklist|ticket_controller|ticket-controller' docs/closed-loop-workflow.md 无命中，未把旧架构当依据"
+        "git diff --stat HEAD（引擎范围）：engine/README.md +20/-1（契约文档节）、engine.py -1（仅删重复 raise）、test_engine.py +5/-7（guardrail 测试 mock 化）；新增文件仅 tests/test_drivers.py 与 handlers/_test_echo.py（6 行无副作用测试 fixture）",
+        "git diff HEAD -- pyproject.toml 为空 — 无新增依赖",
+        "无新护栏逻辑、无新平台/编排、connectors/ 与 close_ticket.py 未被改动、无生产密钥变更"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "status": "PASS",
+      "evidence": [
+        "git diff engine.py 确认 L184-L185 重复 raise WorkflowError 已去重，仅剩一行；grep -c 'unknown driver' engine.py = 1",
+        "有配套测试：test_drivers.py L182-L189 test_unknown_driver_raises_workflow_error 断言 WorkflowError('unknown driver: not-a-driver')；有文档声明：README L149"
       ]
     }
   ],
   "findings": [],
-  "resolved_findings": [
-    {
-      "id": "F-1",
-      "severity": "major",
-      "type": "doc_command_not_executable",
-      "acceptance_criterion_id": "QG-executable-steps",
-      "summary": "第 1 轮发现：文档 mock 演练命令的工作流路径写为 workflows/ticket-pipeline.yaml，从仓库根不可达（FileNotFoundError）。",
-      "resolution": "第 2 轮核验已修复：git diff 确认 docs/closed-loop-workflow.md 仅 L23 一行改为 src/ticket_autopilot/workflows/ticket-pipeline.yaml；QA 从仓库根按文档原样复跑，exit=0，COMPLETED: ['close','execute','plan','verify']，RETRIES: {2: 2}。"
-    }
-  ],
   "non_blocking_comments": [
-    "第 2 轮改动范围核验：git diff --stat 仅 docs/closed-loop-workflow.md（1 行路径修正）与 qa-verdict.json（QA 自有工件），无其他工件被改动；git diff --check exit=0。",
-    "AC-1..AC-5 证据基础不受本次修复影响（阶段映射表、Goal check 段落、Explicit exclusions、AGENTS.md 引用均未改动），第 1 轮 PASS 证据继续有效。",
-    "回归门禁复跑：python3 -m unittest discover -s src/ticket_autopilot/engine/tests → Ran 7 tests, OK；grep -c 'Goal check' docs/closed-loop-workflow.md = 3；旧架构关键字（tasklist/ticket_controller）仍无命中。",
-    "src/ticket_autopilot/engine/README.md L52/L63/L174 存在同样的相对路径写法（同源问题），不属本票验收对象，仅提示。",
-    "本文件覆写了先前 AIO-1 的 qa-verdict.json（AIO-1 verdict=PASS，已随其票据流程消费）。"
+    "环境备注：本机无 `python` 命令且 pytest 未安装于 python3/python3.11，AC-4 按提示词 §2 允许的回退命令以 python3 -m unittest discover 真跑，18 测全绿 EXIT=0。",
+    "工作区另有与本票无关的未提交改动（.workbuddy/memory/*、tasks/AIO-002~005 提示词增删归档），均为流程管理工件而非引擎代码，不计入 AC-5 越界。",
+    "handlers/_test_echo.py 以下划线前缀命名并注明 fixture 用途，与 script driver 的 handlers/<entry> 装载约定一致，无生产副作用。",
+    "本文件覆写了先前 AIO-2 的 qa-verdict.json（AIO-2 verdict=PASS，已随其票据流程消费）。"
   ],
   "recommended_next_state": "READY_FOR_HUMAN_REVIEW"
 }
