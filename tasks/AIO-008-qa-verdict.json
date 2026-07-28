@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.0",
+  "issue_key": "AIO-8",
+  "run_id": "aio-8-qa-20260729-1785259385",
+  "qa_attempt": 1,
+  "verdict": "BLOCKED",
+  "acceptance_criteria": [
+    {
+      "id": "AC-1",
+      "status": "PASS",
+      "evidence": [
+        "build_workflow_yaml (src/ticket_autopilot/connectors/plane.py:175) generated /tmp/aio8-generated.yaml from sample AIO-8 issue dict",
+        "python -m ticket_autopilot.engine run /tmp/aio8-generated.yaml --mock --params '{\"ticket_id\":\"ad9c6997-...\"}' completed all 4 nodes: COMPLETED ['close','execute','plan','verify'], RETRIES {2: 2} (verify->execute loop exercised), snapshot src/ticket_autopilot/runs/ticket-ad9c6997-55f0-4c0b-9e19-330e3cf27997-1785259385.json",
+        "tests/test_connector_plane.py::test_build_workflow_is_engine_valid_and_contains_ticket_context asserts node set {plan,execute,verify,close}, loop edge verify->execute, params.ticket_id default, vars.ticket context, and Engine(mock=True).run with not_completed == []"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "status": "BLOCKED",
+      "evidence": [
+        "Unit level: close_ticket (plane.py:253) posts comment then PATCHes {\"state\": <done-uuid>} (verified by test_close_ticket_comments_then_uses_project_done_state_and_state_field, call order POST comment -> GET states -> PATCH state); create_pr (github.py:51) posts to /repos/{repo}/pulls with feature-branch head, draft=True (test_create_pr_posts_reviewable_feature_branch_metadata)",
+        "Real e2e NOT-RUN: PLANE_API_KEY, GITHUB_TOKEN, GH_TOKEN are all absent from the QA environment, and the QA role is prohibited from mutating Plane/GitHub. Manual gated e2e per dev prompt §7 (real low-risk Plane ticket -> YAML -> close -> feature-branch PR) is required before AC-2 can be marked PASS."
+      ]
+    },
+    {
+      "id": "AC-安全",
+      "status": "PASS",
+      "evidence": [
+        "github.py:33 _validate_pr_target rejects head==base and head in {main,master} including fork syntax owner:main (covered by test_create_pr_rejects_base_or_main_as_head_before_network_call); no merge/push code path exists anywhere in connectors (grep for merge|push returned only docstrings)",
+        "create_pr defaults draft=True and returns for human review; no auto-merge; human review gate preserved",
+        "Secrets only from env/~/.workbuddy/mcp.json (plane.py:35 resolve_api_key, github.py:23 resolve_token); no hardcoded keys; DEFAULT_PROJECT_ID is a non-secret project UUID required by the dev prompt",
+        "Rate limiting: plane.py:62 _rate_limit throttles to 60 req/min; plane.py:112 honors 429 Retry-After with bounded backoff; all failures raise PlaneAPIError/GitHubAPIError with HTTP status+body, never silent"
+      ]
+    },
+    {
+      "id": "AC-范围",
+      "status": "PASS",
+      "evidence": [
+        "AIO-8 deliverables are new files only: connectors/plane.py, connectors/github.py, tests/test_connector_plane.py, tests/test_connector_github.py; no Linear code anywhere",
+        "engine/handlers/close_ticket.py was reduced to a thin delegate to connectors.plane.close_ticket — an integration explicitly permitted by dev prompt §4 (可选整合)",
+        "Uncommitted engine.py/drivers.py modifications in the working tree belong to AIO-6/AIO-7 work streams (tasks/AIO-007-* also modified in the same tree; commit dff90ff is the AIO-6 drivers commit) — not attributable to the AIO-8 connector deliverable"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "id": "QA-001",
+      "severity": "major",
+      "type": "INSUFFICIENT_TEST_COVERAGE",
+      "acceptance_criterion_id": "AC-2",
+      "summary": "Real Plane+GitHub end-to-end (read -> YAML -> close ticket -> feature-branch PR) has not been executed: no PLANE_API_KEY/GITHUB_TOKEN in QA env and QA is barred from mutating Plane/GitHub. AC-2 is verified only at the mocked unit level.",
+      "evidence": {"file": "tasks/AIO-008-dev-prompt.md", "line": 77},
+      "required_fix": "Human operator runs the gated e2e per dev prompt §7 with real credentials against a low-risk Plane ticket, confirms ticket -> Done + comment and PR created on a feature branch (non-main, awaiting review), then attaches ticket URL + PR URL as evidence."
+    }
+  ],
+  "non_blocking_comments": [
+    "plane.py _rate_limit uses a module-global timestamp and is not thread-safe; acceptable for the current single-process controller.",
+    "resolve_token only reads GITHUB_TOKEN/GH_TOKEN env; the gh CLI keyring credential present on this machine is not used — matches the dev prompt but worth noting for the manual e2e.",
+    "Recommend committing the AIO-8 connector files separately from the AIO-6/7 engine/driver changes currently mixed in the same working tree, to keep the revert path clean (dev prompt §9)."
+  ],
+  "recommended_next_state": "BLOCKED"
+}

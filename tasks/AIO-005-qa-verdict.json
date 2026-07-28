@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "ticket": "AIO-5 / Plane #5 36bef6e6-0fb9-44f3-8920-e2b2a5dda0f3",
+  "decision": "accept",
+  "qa_role": "independent QA agent (separate session, read-only re-verification per tasks/AIO-005-acceptance-prompt.md)",
+  "reviewed_at": "2026-07-29",
+  "evidence": {
+    "selected_ticket": "新增 .github/workflows/ci.yml（推荐候选）；git status 确认 .github/workflows/ 整目录此前未跟踪（真实缺口），YAML 合法且触发 push + pull_request",
+    "stages_evidenced": ["dev", "verify", "qa", "fixloop", "pr", "status"],
+    "goal_check_lines": true,
+    "deterministic_green": true,
+    "deterministic_rerun": {
+      "yaml_parse": "python3 -c \"import yaml;yaml.safe_load(open('.github/workflows/ci.yml'))\" -> YAML_VALID, exit 0",
+      "engine_tests_full": "PYTHONPATH=src /tmp/aio5-ci-venv/bin/python -m pytest src/ticket_autopilot/engine/tests/ -q -> 18 passed, exit 0",
+      "engine_tests_test_engine_only": "PYTHONPATH=src /tmp/aio5-ci-venv/bin/python -m pytest src/ticket_autopilot/engine/tests/test_engine.py -q -> 7 passed（与验收提示词预期 7 passed 一致；目录另含 driver 测试故完整命令为 18 passed，差异已在 goal-drift 如实记录）"
+    },
+    "qa_verdict": "accept（本文件即独立 QA verdict；执行者此前如实记录 reject/BLOCKED_NEEDS_HUMAN 而非冒充独立 QA，属正确纪律）",
+    "pr_or_gated": "人工门禁下 diff 就绪 + 决策已记录（无 PR URL / commit SHA；未 push、未建分支，符合安全门禁）",
+    "status_updated": false,
+    "status_note": "Plane 状态未推进，已如实记录 BLOCKED_NEEDS_HUMAN；按验收提示词 §4「真实 e2e 不强制（PR/状态写回属写操作，归人工门禁）」不构成 reject 项",
+    "scope_clean": true,
+    "scope_checks": {
+      "connectors_dir": "仅 __init__.py，无 AIO-8 连接器",
+      "engine_drivers_workflows_diff": "git diff --stat 对 engine.py / drivers.py / workflows/ 为空（零改动）",
+      "worktree": "仅 ?? .github/workflows/ 与 M logs/goal-drift.md"
+    }
+  },
+  "gaps_logged": ["AIO-7 独立 QA connector", "AIO-8 Plane→PR/status glue", "AIO-9 guardrails（保持 out of scope）"],
+  "notes": "AC-1..AC-6 全部通过。AC-4 由本次独立审查兑现（执行时无可用独立 QA driver，执行者正确拒绝自评冒充）；AC-5 走人工门禁替代路径。后续人工动作：1) 授权创建 slice/aio5-ci 分支 + commit + 草稿 PR（获取 GitHub Actions 远端 CI 证据）；2) 授权 Plane MCP 会话将候选工单/AIO-5 推进 In Review 并链接 PR；3) 人类最终决定 merge 与 Done。"
+}

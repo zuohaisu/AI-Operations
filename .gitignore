@@ -47,3 +47,5 @@ worktrees/
 # Engine sandbox (strict cwd for the cli executor) — keep .gitkeep
 sandbox/*
 !sandbox/.gitkeep
+.qoder/settings.local.json
+.firecrawl/github-token-docs.json
