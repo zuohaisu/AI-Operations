@@ -20,7 +20,7 @@ Engine with another controller.
 
 The commands below are evidence inspections, not claims that an unimplemented
 stage is live. Use `PYTHONPATH=src python3 -m ticket_autopilot.engine run
-workflows/ticket-pipeline.yaml --mock --params '{"ticket_id":"DEMO-1"}'` to
+src/ticket_autopilot/workflows/ticket-pipeline.yaml --mock --params '{"ticket_id":"DEMO-1"}'` to
 exercise the existing Engine control flow without contacting Plane or an LLM.
 
 ## Required stage mapping
