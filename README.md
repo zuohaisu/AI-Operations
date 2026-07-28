@@ -6,6 +6,17 @@
 > 仓库文件夹名暂为 `AI-Operations`，项目/工具名为 **Ticket Autopilot**。
 > 团队名 VF/VFF 不在本项目中使用。
 
+## 脚手架与工作入口
+
+| 资产 | 用途 |
+|---|---|
+| [AGENTS.md](AGENTS.md) / [IDEA.md](IDEA.md) | 北极星、强制 Goal check 与复用优先原则。 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 分支、PR、人工 review/merge 闸和工单状态约定。 |
+| [PR 模板](.github/PULL_REQUEST_TEMPLATE.md) | PR 的工单关联、范围、验收、验证和回滚证据。 |
+| [Agent-ready ticket 模板](specs/agent-ready-ticket-template.md) | 对齐 senior-project-manager 的九字段工单合同，以及 spec → Plane issue 流程。 |
+| [持久上下文布局](.workbuddy/memory/README.md) | 长期 `MEMORY.md` 与每日 `YYYY-MM-DD.md` 日志的写入规则。 |
+| [闭环操作定义](docs/closed-loop-workflow.md) | 各阶段的实际实现边界与证据闸（权威操作定义）。 |
+
 ## 闭环
 
 ```
@@ -74,4 +85,4 @@ pip install -e .
 ticket-controller --help
 ```
 
-任务票见 `tasks/ticket-autopilot-v0.1-tasklist.md`。
+任务票以 Plane 中按 [agent-ready ticket 模板](specs/agent-ready-ticket-template.md) 创建的工单为执行合同。`tasks/ticket-autopilot-v0.1-tasklist.md` 是历史任务清单，不作为当前架构依据。

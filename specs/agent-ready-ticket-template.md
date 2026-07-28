@@ -1,7 +1,11 @@
 # Agent-Ready Ticket Template
 
+> **Format alignment:** this template aligns with the senior-project-manager ticket format: the nine required fields are Title, Goal, Scope boundary, Acceptance criteria, Verification method, Dependencies, Definition of Done, Risk & rollback, and Human touchpoints.
+>
 > Purpose: a ticket an AI agent can pick up and execute autonomously the moment it is moved to **In Progress**. Product discussion's real deliverable is a backlog of these — not vague titles.
 > Fits the closed loop: Ticket → Dev → Deterministic Verification → Independent QA → Bounded Fix → PR → Status Update.
+
+For branch, PR, review, and status conventions, see [CONTRIBUTING.md](../CONTRIBUTING.md). For the authoritative operational stages and evidence gates, see [the closed-loop workflow](../docs/closed-loop-workflow.md).
 
 ## How to use
 - One ticket = one independently shippable unit. If it needs 5 human decisions mid-way, split it.
@@ -60,7 +64,60 @@ Explicit list that, when all true, triggers PR + status update:
 - **Title** → ticket title
 - **Goal / Scope / AC / Verification** → ticket description (use the sections above)
 - **Status = In Progress** → triggers the autonomous loop
-- **Definition of Done met + PR** → agent moves ticket to In Review / Done; human merges
+- **Definition of Done met + PR** → Controller moves ticket to In Review when its evidence gates are met; human reviews and merges
+
+## 空白可填模板
+
+Copy this block into a planning document or the Plane issue description. Replace every placeholder before moving the issue to **In Progress**.
+
+```md
+## 1. Title
+<Imperative, single outcome>
+
+## 2. Goal (why)
+<1–2 sentences describing the intended outcome and value>
+
+## 3. Scope boundary
+- **In scope:**
+  - <included change>
+- **Out of scope (explicit non-goals):**
+  - <excluded change>
+
+## 4. Acceptance criteria
+- [ ] <Testable pass/fail condition>
+
+## 5. Verification method (the deterministic gate)
+- Type: <command / inspection / QA script>
+- Command or procedure: `<exact command or steps>`
+- Pass: <objective passing result>
+- Fail: <bounded fix-loop or blocked outcome>
+
+## 6. Dependencies
+- <ticket / service / environment variable / none>
+
+## 7. Definition of Done
+- [ ] Acceptance criteria met
+- [ ] Verification method passes
+- [ ] <required documentation, QA, or CI evidence>
+
+## 8. Risk & rollback
+- Risk: <what could break>
+- Rollback: <how to safely revert>
+
+## 9. Human touchpoints
+- Trigger: <who or what moves the issue to In Progress>
+- Gate: <human reviewer/merger>
+- Escalation: <when to report BLOCKED_NEEDS_HUMAN>
+```
+
+## Spec → Plane issue 操作流程
+
+1. Draft the ticket from the **空白可填模板** and complete all nine required fields.
+2. Check that Scope boundary, Acceptance criteria, Verification method, Dependencies, Risk & rollback, and Human touchpoints are concrete; otherwise keep the spec in planning and resolve the gap.
+3. Create one Plane issue with the Title as its title and the completed nine-field template as its description. Add the relevant project, priority, labels, and dependency links.
+4. Re-read the Plane description against the source spec. The Plane issue becomes the execution contract; link the source spec rather than duplicating changing material.
+5. A PM or designated human moves a complete issue to **In Progress**. The development agent follows the contract and records evidence.
+6. After the Definition of Done and required evidence gates are met, the Controller or human prepares the PR using the [PR template](../.github/PULL_REQUEST_TEMPLATE.md) and moves the issue to **In Review**. Failed evidence or an unresolved ambiguity maps to **Blocked** / `BLOCKED_NEEDS_HUMAN` as described in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ---
 
