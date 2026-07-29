@@ -1,0 +1,54 @@
+{
+  "schema_version": "1.0",
+  "issue_key": "AIO-8",
+  "run_id": "aio-8-qa-20260729-attempt2",
+  "qa_attempt": 2,
+  "verdict": "PASS",
+  "acceptance_criteria": [
+    {
+      "id": "AC-1",
+      "status": "PASS",
+      "evidence": [
+        "build_workflow_yaml (src/ticket_autopilot/connectors/plane.py:175) generated /tmp/aio8-generated.yaml from the AIO-8 issue dict",
+        "python -m ticket_autopilot.engine run /tmp/aio8-generated.yaml --mock --params '{\"ticket_id\":\"ad9c6997-...\"}' completed all 4 nodes: COMPLETED ['close','execute','plan','verify'], RETRIES {2: 2} (verify->execute loop exercised)",
+        "tests/test_connector_plane.py::test_build_workflow_is_engine_valid_and_contains_ticket_context asserts node set {plan,execute,verify,close}, loop edge verify->execute, params.ticket_id default, vars.ticket context, Engine(mock=True).run not_completed == []"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "status": "PASS",
+      "evidence": [
+        "Real e2e verified (QA attempt 2, read-only checks): Plane issue ad9c6997-55f0-4c0b-9e19-330e3cf27997 (AIO-8) is in state 'Done' (group=completed, state id ee5e8f63-8e18-42bf-91b7-883917642ff9)",
+        "Closure comment exists on the issue (2026-07-29T02:03:52+08:00): '## AIO-8 completion evidence' with PR URL, feature branch, commit c1bc10d, and verification command",
+        "GitHub PR #1 https://github.com/zuohaisu/AI-Operations/pull/1 'AIO-8: implement Plane ticket and GitHub PR connectors': head=feature/aio-8-plane-pr-connector (non-main), base=main, created as draft, merged manually by human account zuohaisu at 2026-07-28T18:03:42Z — the connector did not merge it",
+        "Unit level: close_ticket (plane.py:253) posts comment then PATCHes {\"state\": <done-uuid>} (test_close_ticket_comments_then_uses_project_done_state_and_state_field, call order POST comment -> GET states -> PATCH); create_pr (github.py:51) posts feature-branch draft PR (test_create_pr_posts_reviewable_feature_branch_metadata)"
+      ]
+    },
+    {
+      "id": "AC-安全",
+      "status": "PASS",
+      "evidence": [
+        "github.py:33 _validate_pr_target rejects head==base and head in {main,master} including fork syntax owner:main (test_create_pr_rejects_base_or_main_as_head_before_network_call); no merge/push code path exists in connectors",
+        "create_pr defaults draft=True; PR #1 was merged by a human, not by the connector — human gate held",
+        "Secrets only from env/~/.workbuddy/mcp.json (plane.py:35 resolve_api_key, github.py:23 resolve_token); no hardcoded keys",
+        "Rate limiting: plane.py:62 _rate_limit throttles to 60 req/min; plane.py:112 honors 429 Retry-After with bounded backoff; failures raise PlaneAPIError/GitHubAPIError with HTTP status+body, never silent"
+      ]
+    },
+    {
+      "id": "AC-范围",
+      "status": "PASS",
+      "evidence": [
+        "Merged PR #1 (commit c1bc10d) contains the AIO-8 deliverables: connectors/plane.py, connectors/github.py, tests/test_connector_plane.py, tests/test_connector_github.py; no Linear code anywhere",
+        "engine/handlers/close_ticket.py reduced to a thin delegate to connectors.plane.close_ticket — integration explicitly permitted by dev prompt §4",
+        "Engine/drivers changes were landed separately under AIO-6/AIO-7 commits (dff90ff, 1bff553), not in the AIO-8 PR"
+      ]
+    }
+  ],
+  "findings": [],
+  "non_blocking_comments": [
+    "PR #1 has an empty formal reviews list and was merged by its author (solo-maintainer repo). The connector-side guardrail (draft PR, no auto-merge) held; for multi-person phases, require at least one formal GitHub review before merge.",
+    "plane.py _rate_limit uses a module-global timestamp and is not thread-safe; acceptable for the current single-process controller.",
+    "resolve_token only reads GITHUB_TOKEN/GH_TOKEN env; the gh CLI keyring credential is not used by the connector itself."
+  ],
+  "recommended_next_state": "PASS"
+}

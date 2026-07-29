@@ -42,6 +42,9 @@ Conceptually **Ticket Autopilot** — a lightweight local controller that turns 
 - **本项目 dogfood Engine 流程**：自动化 Engine 建成前，由用户**手动当 Engine**——读 Plane 工单 → 驱动执行 agent 跑 Plan→Execute→Verify→Close → 关单/建 PR。
 - **Plane 工单格式** = `specs/agent-ready-ticket-template.md`（9 字段：标题/目标/范围边界/验收标准/验证方式/依赖/Done 定义/风险回滚/人工点位）。
 - **AIO 提示词交付约定（扁平化 2026-07-28）**：每个 AIO 票的开发/验收提示词写成 `tasks/AIO-00<N>-dev-prompt.md` 与 `tasks/AIO-00<N>-acceptance-prompt.md`（单层文件、零填充 3 位、不分子目录，省文件夹）。`AIO-00<N>` 对应 Plane 项目 Ticket Autopilot/AIO 的 issue #<N>。两提示词格式锚定 AIO-002（`AIO-002-dev-prompt.md`/`AIO-002-acceptance-prompt.md`），含 [Goal check]、AC-1..、确定性验证命令、复用优先硬约束、禁止用旧 `tasks/ticket-autopilot-v0.1-tasklist.md` 作架构依据。非约定文件保留：`ticket-autopilot-qoderwake-prompt.md`（QoderWake 专用，待定是否并入）、`ticket-autopilot-v0.1-tasklist.md`（STALE，勿作架构依据）。目前已有提示词的票：#1/#2/#3/#4/#5/#6/#7/#8/#9（全部齐备，AIO-004 与 AIO-005 于 2026-07-28 晚补齐）。
-- **Done 票的提示词归档（2026-07-28）**：当某 AIO 票在 Plane 标记为 completed（state_group=completed），其 `AIO-00<N>-{dev,acceptance}-prompt.md` 移入 `tasks/archive/`（与 active 区分离，保持 9 个 active 文件名清晰）。归档判定依据是 Plane 的 completed 状态，而非"提示词写完"。首个归档批次：#2、#3（2026-07-28 已归档）。
+- **归档规则（2026-07-29 终版）**：
+  - *提示词*（`AIO-00<N>-{dev,acceptance}-prompt.md`）：仅当对应 Plane 票 `state_group=completed` 才进 `tasks/archive/`；started/unstarted 的票其提示词留在 active。曾误把 #1/#4/#6（started）提前归档，已退回 active。
+  - *QA 验证产物*（`AIO-00<N>-qa-verdict.json`）：**最终结论 = pass/accept 即可进 archive**，独立于票的完成状态。判定字段：`verdict:"PASS"` / `decision:"accept"`。`AIO-005`(accept) 与 `AIO-008`(PASS) 均已归档；其余票暂无 qa-verdict 文件。
+  - 当前 archive = #2/#3/#7/#8 提示词 + AIO-005/AIO-008 两个 qa-verdict；active = #1/#4/#5/#6/#9 提示词。
 - **护栏边界（跨票）**：CLI 沙箱/只读/白名单逻辑在 `engine/drivers.py::cli_call`，实现雏形已存在；**增强**归 AIO-9（安全护栏），其余 AIO 票（如 AIO-6 drivers）只测/留不增强。
 - **Agent 团队架构（已确认 2026-07-29）**：闭环角色映射 —— Plan = Codex CLI（WorkBuddy CLI 本机无二进制，改用 Codex CLI 兜底）；Execute(dev×2 备份) = Claude Code + 「pi」(pi 身份**仍未确认**)；Verify(QA×2 备份) = QoderWake CLI + Codex。**注意：Codex 同时承担 Plan 与 QA#2 两角色**（非独立工具、非严格"互为备份"）。缺口：#7 工单只写 Codex，要落实"2QA备份"需把 QoderWake CLI 也接进 Verify（扩 #7）。未启动票 #7/#8/#9 确认次序：#9 安全护栏 → #8 连接器 → #7 Codex QA。
