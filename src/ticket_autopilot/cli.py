@@ -10,6 +10,7 @@ Subcommands:
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import sys
@@ -65,14 +66,34 @@ def _print(value: dict[str, Any], *, stream=None) -> None:
     print(json.dumps(value, sort_keys=True, default=str), file=stream or sys.stdout)
 
 
-def _isolate_run_process_group() -> None:
-    """Give an active Run a group that cancel can terminate without the shell."""
+def _isolate_run_process_group() -> int | None:
+    """Give an active Run a group that cancel can terminate without the shell.
+
+    ``setsid`` rejects a process-group leader.  The console script can itself
+    be that leader when invoked by an interactive shell, so retry in a forked
+    child (which is not a group leader).  The parent only relays the child's
+    exit code; all workflow I/O and Run ownership stay in the isolated child.
+    """
     if os.name != "posix":
         raise ControllerError("RUN_ISOLATION_FAILED", "safe Run cancellation requires a POSIX process group")
     try:
         os.setsid()
+        return None
     except OSError as exc:
-        raise ControllerError("RUN_ISOLATION_FAILED", f"could not isolate Run process group: {exc}") from exc
+        if exc.errno != errno.EPERM:
+            raise ControllerError("RUN_ISOLATION_FAILED", f"could not isolate Run process group: {exc}") from exc
+    try:
+        child_pid = os.fork()
+    except OSError as exc:
+        raise ControllerError("RUN_ISOLATION_FAILED", f"could not create isolated Run process: {exc}") from exc
+    if child_pid:
+        _, wait_status = os.waitpid(child_pid, 0)
+        return os.waitstatus_to_exitcode(wait_status)
+    try:
+        os.setsid()
+    except OSError as exc:  # Defensive: a fork child should never be a group leader.
+        raise ControllerError("RUN_ISOLATION_FAILED", f"could not isolate forked Run process: {exc}") from exc
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -80,7 +101,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "run":
-            _isolate_run_process_group()
+            child_exit = _isolate_run_process_group()
+            if child_exit is not None:
+                return child_exit
         controller = TicketController(args.repository)
         if args.command == "run":
             result = controller.run(args.issue_key)

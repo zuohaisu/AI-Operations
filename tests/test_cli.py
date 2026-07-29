@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import errno
 from pathlib import Path
 from unittest import mock
 
@@ -10,7 +10,6 @@ import pytest
 
 from ticket_autopilot import cli
 from ticket_autopilot.services.ticket_controller import ControllerError, TicketController
-from tests.test_run_worktree import ticket_spec
 
 
 def test_help_lists_only_supported_product_commands(capsys):
@@ -46,6 +45,15 @@ def test_missing_plane_credential_fails_before_plane_read_or_agent(tmp_path: Pat
             controller.run("AIO-14")
     assert exc.value.code == "CREDENTIAL_REQUIRED"
     fetch.assert_not_called()
+
+
+def test_process_group_leader_retries_isolation_in_a_child():
+    leader_error = OSError(errno.EPERM, "operation not permitted")
+    with mock.patch.object(cli.os, "setsid", side_effect=[leader_error, None]) as setsid:
+        with mock.patch.object(cli.os, "fork", return_value=0) as fork:
+            assert cli._isolate_run_process_group() is None
+    assert setsid.call_count == 2
+    fork.assert_called_once_with()
 
 
 def test_cli_prints_actionable_preflight_error_without_secret(monkeypatch, capsys):
