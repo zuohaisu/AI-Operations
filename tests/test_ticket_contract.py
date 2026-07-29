@@ -141,6 +141,18 @@ def test_serialization_round_trip_preserves_load_bearing_fields():
     assert restored["constraints"] == {"max_fix_attempts": 2, "allow_main_push": False}
 
 
+def test_optional_scope_constraints_are_preserved_for_development_verification():
+    description = VALID_DESCRIPTION.replace(
+        "- allow_main_push: false\n",
+        "- allow_main_push: false\n- forbidden_paths: `secrets/**`, `.github/workflows/**`\n- max_changed_files: 4\n",
+    )
+
+    spec = ticket_contract.preflight_plane_issue(valid_issue(description=description))["ticket_spec"]
+
+    assert spec["constraints"]["forbidden_paths"] == ["secrets/**", ".github/workflows/**"]
+    assert spec["constraints"]["max_changed_files"] == 4
+
+
 def test_schema_subset_rejects_contract_that_allows_main_push():
     spec = ticket_contract.map_plane_issue(valid_issue())
     spec["constraints"]["allow_main_push"] = True

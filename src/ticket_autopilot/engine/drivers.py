@@ -28,8 +28,10 @@ from .guardrails import (
     DEFAULT_TOOL_WHITELIST,
     GuardrailPolicy,
     SecurityError,
+    RunExecutionContext,
     check_cwd,
     check_permission_mode,
+    check_role_boundary,
     check_tools,
 )
 
@@ -166,14 +168,26 @@ def _direct_call_policy(agent: dict) -> GuardrailPolicy:
 
 
 def cli_call(agent: dict, inputs: dict, node: dict, engine_root: str,
-             policy: GuardrailPolicy | None = None) -> object:
-    """Run a CLI only after deterministic Engine guardrail checks pass."""
+             policy: GuardrailPolicy | None = None,
+             run_context: RunExecutionContext | None = None) -> object:
+    """Run a CLI only after deterministic Engine and role guardrail checks pass."""
     policy = policy or _direct_call_policy(agent)
     cwd = check_cwd(agent.get("cwd", "sandbox"), engine_root, policy)
     permission_mode = agent.get("permission_mode", "read-only")
     tools = agent.get("tools", [])
     check_permission_mode(permission_mode, policy)
     check_tools(tools, policy)
+    # ``node.agent`` permits simple workflows to name their role by agent name;
+    # explicit node/agent role wins and unnamed agents retain AIO-9 behaviour.
+    role = node.get("role") or agent.get("role") or node.get("agent")
+    check_role_boundary(
+        role,
+        cwd=cwd,
+        permission_mode=permission_mode,
+        tools=tools,
+        run_context=run_context,
+        requested_branch=agent.get("branch"),
+    )
 
     prompt = _format_prompt(inputs)
     system = agent.get("system", "")

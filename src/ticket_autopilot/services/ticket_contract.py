@@ -233,16 +233,25 @@ def _parse_verification(body: str) -> list[dict[str, str]]:
 
 def _parse_constraints(body: str) -> dict[str, Any]:
     values: dict[str, Any] = {}
-    for line in _bullet_values(body):
-        match = re.match(r"([^:]+):\s*(.+)$", line)
+    for source_line in body.splitlines():
+        bullet = re.match(r"\s*[-*]\s+(.+?)\s*$", source_line)
+        if not bullet:
+            continue
+        # Unlike generic prose bullets, glob patterns must retain trailing '*'.
+        match = re.match(r"([^:]+):\s*(.+)$", bullet.group(1))
         if not match:
             continue
         key = re.sub(r"[*`]", "", match.group(1)).strip().casefold().replace("-", "_").replace(" ", "_")
-        raw = _plain(match.group(2))
-        if key == "max_fix_attempts" and re.fullmatch(r"[0-9]+", raw):
+        raw_source = match.group(2).strip()
+        raw = _plain(raw_source)
+        if key in {"max_fix_attempts", "max_changed_files"} and re.fullmatch(r"[0-9]+", raw):
             values[key] = int(raw)
         elif key == "allow_main_push" and raw.casefold() in {"true", "false"}:
             values[key] = raw.casefold() == "true"
+        elif key == "forbidden_paths":
+            paths = [part.strip().strip("`") for part in raw_source.split(",")]
+            if paths and all(paths):
+                values[key] = paths
     missing = {"max_fix_attempts", "allow_main_push"} - values.keys()
     if missing:
         raise TicketContractError(
