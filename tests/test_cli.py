@@ -81,14 +81,15 @@ def test_process_group_leader_hard_exits_forked_child_after_dispatch():
     hard_exit.assert_called_once_with(cli.EXIT_PREFLIGHT)
 
 
-def test_cli_prints_actionable_preflight_error_without_secret(monkeypatch, capsys):
+def test_dispatch_prints_actionable_preflight_error_without_secret(monkeypatch, capsys):
+    """Unit-test formatting below the fork boundary; subprocess tests cover CLI I/O."""
     class MissingCredential:
         def __init__(self, *_args):
-            from ticket_autopilot.services.ticket_controller import ControllerError
             raise ControllerError("CREDENTIAL_REQUIRED", "set PLANE_API_KEY in the environment")
 
     monkeypatch.setattr(cli, "TicketController", MissingCredential)
-    assert cli.main(["run", "AIO-14"]) == cli.EXIT_PREFLIGHT
+    args = cli.build_parser().parse_args(["run", "AIO-14"])
+    assert cli._dispatch(args) == cli.EXIT_PREFLIGHT
     error = capsys.readouterr().err
     assert "CREDENTIAL_REQUIRED" in error
     assert "PLANE_API_KEY" in error
