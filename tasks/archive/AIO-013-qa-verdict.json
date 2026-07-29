@@ -1,0 +1,100 @@
+{
+  "schema_version": "1.0",
+  "issue_key": "AIO-13",
+  "plane_issue_id": "3e9e6450-4759-4a45-8e59-d6acb1545e7c",
+  "run_id": "aio-13-qa-20260729-1",
+  "qa_attempt": 1,
+  "verdict": "PASS",
+  "review_target": {
+    "base": "0d5300f (merge of agent/aio-11-development-isolation, 含 AIO-12 ef4aa3f)",
+    "head": "fdcebb1 'AIO-13 wire evidence-gated ticket pipeline'（HEAD b421f0e 仅 uv.lock）",
+    "diff_scope": "新增 services/ticket_pipeline.py(+390)、tests/integration/test_ticket_pipeline.py(+251)；最小扩展 connectors/plane.py(close_ticket 泛化为 set_ticket_state，_find_done_state→_find_state)、connectors/qa.py(run_qa 增 ticket_spec/diff/test_evidence/run_id/qa_attempt 证据通道)、engine/handlers/qa.py(透传 **context)、tests/test_connector_plane.py(+22)；共 6 文件 +743/-28。工作树干净，改动全部在 fdcebb1 内"
+  },
+  "acceptance_criteria": [
+    {
+      "id": "AC-1",
+      "status": "PASS",
+      "evidence": [
+        "tests/integration/test_ticket_pipeline.py:123 test_ac1：调用序列断言 == ['plan','execute','verify','qa','pr','plane']（Draft PR 严格先于 Plane In Review）；draft is True；plane payload state=='In Review'；summary 同时含 'Run:'、'PR: https://example.invalid/pr/13'、'Checks:'、'QA: PASS'（PR/Run/Checks/QA 摘要完整）",
+        "ticket_pipeline.py:203-204 仅 verdict=='PASS' 且先通过 _verified_evidence(:356 status==VERIFIED && verified && eligible_for_pr && checks 非空)与 _qa_evidence_error 后进入 _publish；:239 In Review summary 用创建后的 PR URL 重算",
+        "幂等语义：:131 终态 ledger 直接返回留存 result；测试 :140-143 重复 run_existing 后 pr/plane 调用次数仍各为 1"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "status": "PASS",
+      "evidence": [
+        "tests/integration/test_ticket_pipeline.py:146 test_ac2：第一次 FAIL 后序列 == ['plan','execute','verify','qa','execute','verify','qa','pr','plane']（完整重跑 verify+QA）；第二次 execute 的 findings == 原始 finding 数组（逐对象相等），且 kwargs 键集合恰为 {ticket_spec, plan, run, findings} —— 无 summary/诊断注入",
+        "ticket_pipeline.py:210 findings = verdict['findings'] 原样透传（:144 注释明确 unmodified QA array）；:198-200 _qa_evidence_error 要求 FAIL findings 全部带 evidence，否则按 BLOCKED_QA_EVIDENCE 停止而非重试"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "status": "PASS",
+      "evidence": [
+        "tests/integration/test_ticket_pipeline.py:162 test_ac3：连续三次 FAIL → status==BLOCKED_QA_EXHAUSTED，execute/verify/qa 各恰 3 次，'pr' not in calls，首个 plane 调用 state=='Blocked'",
+        "ticket_pipeline.py:208-209 fix_attempt>=2 时第三次 FAIL 直接 exhausted；:81-84 构造器硬拒绝 max_fix_attempts!=2，上限不可被静默改写"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "status": "PASS",
+      "evidence": [
+        "tests/integration/test_ticket_pipeline.py:180 参数化四例：QA BLOCKED→BLOCKED_QA_BLOCKED、{}畸形 JSON→BLOCKED_QA_INVALID、TimeoutError→BLOCKED_QA_TIMEOUT、PASS 但 AC evidence 为空→BLOCKED_QA_EVIDENCE；每例 execute==1、qa==1、无 pr、Plane→Blocked",
+        "ticket_pipeline.py:184-202 四条路径均在 fix_attempt 递增(:212-213 仅承重 FAIL 分支)之前 return，即不计为修复轮次；malformed 经 _normalise_qa_output→validate_verdict(schema 校验)拦截"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "status": "PASS",
+      "evidence": [
+        "tests/integration/test_ticket_pipeline.py:207 test_ac5：verifier 返回 FAILED_DEVELOPMENT → 序列恰为 ['plan','execute','verify','plane']，QA mock 内嵌 pytest.fail('QA must not run') 未触发；plane state=='Blocked'（非 In Review），PR 调用为 0",
+        "ticket_pipeline.py:152-158 _verified_evidence 不通过即 BLOCKED_DETERMINISTIC_VERIFICATION 返回，QA/diff/PR 代码均在其后，结构上不可达"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "status": "PASS",
+      "evidence": [
+        "tests/integration/test_ticket_pipeline.py:217 参数化 github/plane 两例：均 status==BLOCKED_ENVIRONMENT 且 success==False；runs/<id>/ticket-pipeline-state-v1.json 落盘且含 'eligible_for_pr'（verify 证据在外部写失败后留存）",
+        "GitHub 失败：_publish 捕获后走 _blocked→先 _save_state 落盘证据(:274-287 注释：Plane failure cannot erase blocked fact)再尝试 Plane Blocked；Plane 失败：_environment_failure(:245-248) 不发第二次 Plane 写，本地证据为权威失败记录；两路径均无 SUCCESS 字样返回"
+      ]
+    },
+    {
+      "id": "AC-7",
+      "status": "PASS",
+      "evidence": [
+        "tests/integration/test_ticket_pipeline.py:239 test_ac7：成功路径外部动作仅 ['pr','plane']（末两位），所有 plane payload state != 'Done'，PR draft is True 且 head != base",
+        "静态核验：ticket_pipeline.py 唯一 subprocess 为只读 git diff(:365)；connectors/github.py:3,61 'never pushes branches, merges'，无 merge/push API；plane.py _find_state 对 In Review/Blocked 禁用 group 回退、set_ticket_state 'never infers Done'；close_ticket(Done) 保留为 legacy 包装且 AIO-13 流水线无任何调用点"
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "command": ".venv/bin/python3 -m pytest tests/integration/test_ticket_pipeline.py -q",
+      "result": "11 passed in 1.32s, EXIT=0（AC-1~AC-3、AC-5 各 1 例 + AC-4 四参数化 + AC-6 两参数化 + AC-7）"
+    },
+    {
+      "command": ".venv/bin/python3 -m pytest -q",
+      "result": "127 passed, 2 subtests passed in 5.47s, EXIT=0（全量回归含 AIO-9~AIO-12 既有套件与本次 plane connector 新用例）"
+    }
+  ],
+  "safety_checks": [
+    "外部 I/O 全 mock 核验：集成测试的 planner/executor/verifier/qa/github_create_pr/plane_update/diff_provider 全部注入桩（pipeline fixture :81-120），无任何 http/urllib/requests import；Plane connector 单测 mock.patch _request；测试全程无真实 Plane/GitHub/Agent 请求",
+    "无真实凭证：集成测试目录无硬编码 api_key/ghp_/token（grep 核验为空）；plane 单测用 'secret' 占位符",
+    "副作用顺序审查：PASS 链为 落盘 qa-verdict → Draft PR → In Review（PR 先于状态写）；Blocked 链为 先落盘 result/evidence 再写 Plane Blocked；Plane 首写失败后不重试第二次写（幂等标志 state['pr']/plane_in_review/plane_blocked 各自 create-once）",
+    "no-false-success：SUCCESS 仅经 _publish 单一出口，需 schema-valid PASS + AC 证据齐全 + _verified_evidence 三重门禁；:215 兜底 except 将任何未预期异常归入 BLOCKED_ENVIRONMENT 而非放行；qa.py PASS 自相矛盾（非 PASS AC 或 blocker/major finding）降级 BLOCKED",
+    "验收全程只读：未改 workflow/tests/src；仅按归档惯例复制 AIO-12 verdict 至 tasks/archive/ 并写本 verdict；git status 除上述两文件外无变化"
+  ],
+  "findings": [],
+  "non_blocking_comments": [
+    "minor：test_ac6 中 github/plane 两分支的调用序列断言相同（if/else 冗余），且 plane 分支未断言末次 plane 调用 state=='In Review'（写入失败的那次）；语义已由 status/success 断言覆盖，不影响承重。",
+    "minor：In-scope 第 1 条'扩展现有声明式 workflow'实际落地为 TicketPipeline 服务组合（workflows/ticket-pipeline.yaml 未改，其 close→Done 语义仍属旧 AIO-7 路径且未接入新流水线）；符合架构次序第 2 条'最小确定性 glue'且模块 docstring 明确声明非第二 Engine/产品 CLI，不判违规，但 YAML workflow 与 TicketPipeline 的收敛应在后续工单明确。",
+    "minor：run_existing 为幂等 ledger 续跑（dev prompt in-scope '幂等语义'要求），非产品级并行/Resume 功能，不判 out-of-scope。",
+    "info：ticket_pipeline.py:116 的 run_id 条件表达式两分支等价可简化；:141 fix_attempt 从 state 恢复但 findings 亦同步持久化，重入语义一致。",
+    "环境偏差（延续 AIO-11/12 验收记录）：提示词字面命令 'python3 -m pytest' 需经 .venv 解释器执行（系统 python3 无 pytest）；本次以 .venv/bin/python3 -m pytest 运行，两条命令 EXIT=0。"
+  ],
+  "scope_violation": "none",
+  "security_violation": "none",
+  "recommended_next_state": "READY_FOR_HUMAN_REVIEW"
+}

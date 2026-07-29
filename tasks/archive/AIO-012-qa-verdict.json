@@ -1,0 +1,89 @@
+{
+  "schema_version": "1.0",
+  "issue_key": "AIO-12",
+  "plane_issue_id": "dce4a1df-7d8f-4a5c-b6a0-f424a6fe1f6e",
+  "run_id": "aio-12-qa-20260729-1",
+  "qa_attempt": 1,
+  "verdict": "PASS",
+  "review_target": {
+    "base": "598c2ff (AIO-11, agent/aio-11-development-isolation)",
+    "head": "ef4aa3f 'AIO-12 add deterministic development verifier'",
+    "diff_scope": "新增 services/development_verifier.py(+408)、schemas/development-evidence.schema.json(+52)、tests/test_development_verifier.py(+210)；支撑性扩展 ticket-spec.schema.json(constraints 增 forbidden_paths/max_changed_files) 与 ticket_contract.py(_parse_constraints 解析新字段) 及 test_ticket_contract.py(+12)；共 6 文件 +701/-5。无 PR/真实 Plane/GitHub/QA schema/CLI/Dashboard 代码"
+  },
+  "acceptance_criteria": [
+    {
+      "id": "AC-1",
+      "status": "PASS",
+      "evidence": [
+        "tests/test_development_verifier.py:82 test_ac1_no_new_commit_is_blocked_environment_and_never_has_a_pr_eligibility：无新 commit 的 Run → status==BLOCKED_ENVIRONMENT、verified=false、eligible_for_pr=false、checks==[]（Git 前置失败后验证命令不执行）",
+        "development_verifier.py:118-120 head_sha==base_sha 或 new_commit_count==0 → 记 'no new Commit after Run base SHA' 并 BLOCKED_ENVIRONMENT；模块顶部注释与 import 均无 GitHub/Plane/PR 依赖，_persist 仅写本地 artifact —— GitHub Connector 结构性不可被调用，PR 资格仅由 eligible_for_pr 布尔承载"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "status": "PASS",
+      "evidence": [
+        "tests/test_development_verifier.py:94 参数化 empty_diff/conflict/bad_message 三个负向用例：分别在临时仓库构造 --allow-empty 提交、真实 merge 冲突、缺 issue key 的 commit message → 均 FAILED_DEVELOPMENT，且落盘 evidence 与返回值逐字段相等(saved==result)",
+        "evidence_gaps 分别断言 'Diff is empty' / 'unresolved merge conflicts' / 'does not contain issue key AIO-12'（development_verifier.py:285-300 _git_failures）"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "status": "PASS",
+      "evidence": [
+        "tests/test_development_verifier.py:122 test_ac3：automated+query verification 与 required_check 共 3 条命令，逐条断言 cwd==record.worktree、timeout_seconds==5、exit_code 为 int、started_at<=finished_at，且 stdout/stderr 为真实进程输出（'verification-out'/'verification-err'/'required-out'）",
+        "development_verifier.py:327-355 _run 统一以显式 cwd、timeout、stdin=DEVNULL、capture_output 执行，TimeoutExpired/OSError 均转为可回读证据而非异常放行；:66-80 CommandEvidence 序列化 command/argv/cwd/timeout/start/finish/exit/stdout/stderr/timed_out"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "status": "PASS",
+      "evidence": [
+        "tests/test_development_verifier.py:148 test_ac4：required_check 'exit 7' → FAILED_DEVELOPMENT、verified=false、eligible_for_pr=false，且证据记录真实 exit_code==7 与 stderr=='failing'",
+        "development_verifier.py:146-152 任一 exit_code!=0 追加 evidence_gap，status=VERIFIED 仅当 evidence_gaps 为空；:357-360 verified/eligible_for_pr 均由 status==VERIFIED 派生，成功判定链路中不存在任何自然语言/Summary 输入（decision_inputs 固定为 ticket-spec/git/scope/command-exit-codes）"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "status": "PASS",
+      "evidence": [
+        "tests/test_development_verifier.py:161 test_ac5：happy path → VERIFIED，落盘 bundle 与内存结果相等，schema_version/kind 与 development-evidence.schema.json 契约枚举一致，run.base_sha/git.head_sha/changed_files/commands/checks 字段齐全",
+        "文件权限断言 st_mode & 0o222 == 0（只读 0444）；development_verifier.py:363-374 用 os.link 原子 create-if-absent，已存在 bundle 直接回读不重写（:101-103），保证 QA 消费的证据不可变",
+        "load_development_evidence_schema() 提供版本化契约供 QA Connector 直接解析"
+      ]
+    },
+    {
+      "id": "AC-6",
+      "status": "PASS",
+      "evidence": [
+        "tests/test_development_verifier.py:182 参数化两个负向：forbidden_paths=['secrets/**'] 命中 secrets/token.txt → 'forbidden path changed'；max_changed_files=1 超限 → 'exceeds max_changed_files'；均 BLOCKED_NEEDS_HUMAN、eligible_for_pr=false 且 checks==[]（scope 拦截在 ticket 命令执行之前，required_check 'printf should-not-run' 从未运行）",
+        "development_verifier.py:122-126 scope violation 直接短路；:262-282 另防绝对路径与 '..' 逃逸；:384-391 _matches_forbidden 覆盖 fnmatch/PurePosixPath.match/'/**' 前缀三种 glob 形式"
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "command": ".venv/bin/python3 -m pytest tests/test_development_verifier.py -q",
+      "result": "10 passed in 1.30s, EXIT=0（含 AC-1~AC-6 及 test_unsafe_commands_escalate_without_execution：curl → BLOCKED_NEEDS_HUMAN 且未执行）"
+    },
+    {
+      "command": ".venv/bin/python3 -m pytest -q",
+      "result": "115 passed, 2 subtests passed in 2.89s, EXIT=0（全量回归含 AIO-9 guardrails、AIO-10 ticket_contract、AIO-11 run_worktree/role_guardrails）"
+    }
+  ],
+  "safety_checks": [
+    "全部测试仅使用 tempfile.TemporaryDirectory 临时 Git 仓库（TemporaryRun fixture），验收前后真实仓库 git status/branch 未变化",
+    "副作用隔离核验：测试命令仅 true/printf/exit，无网络/生产/迁移/交互命令；verifier 自身对 unsafe 命令（network/remote git/migration/production/interactive/irreversible 七类，:38-46）在执行前升级 BLOCKED_NEEDS_HUMAN，测试 :202 覆盖",
+    "cwd/timeout 约束核验：所有 subprocess 调用显式 cwd+timeout+stdin=DEVNULL，git 子命令固定 15s，ticket 命令用构造器超时（测试中 5s）",
+    "QA 过程只读：未修改任何 src/tests/证据文件；仅按归档惯例复制 AIO-11 verdict 至 tasks/archive/ 并写本 verdict"
+  ],
+  "findings": [],
+  "non_blocking_comments": [
+    "环境偏差（与 AIO-11 验收时相同，仍未修复）：.venv 缺 pytest 与 pyyaml，提示词字面命令 'python3 -m pytest' 无法直跑；本次经 uv pip install pytest pyyaml 后在 .venv 内执行，两条命令 EXIT=0。建议将 pytest/pyyaml 声明为 dev 依赖。",
+    "_UNSAFE_COMMAND_PATTERNS 中 r'\\b(?:read|select)\\b' 判定 'interactive input' 偏宽（如含 'select' 字样的合法测试命令会被升级 BLOCKED_NEEDS_HUMAN）；方向保守（宁升级不放行），不构成缺陷。",
+    "ticket-spec.schema.json 与 ticket_contract.py 的 forbidden_paths/max_changed_files 扩展属 AIO-12 In-scope 第 5 条的必要支撑（可选字段、向后兼容，test_ticket_contract.py 有对应新增用例），不判 scope 蔓延。",
+    "AC-2 空 Diff 用例通过 --allow-empty 构造，此时 new_commit_count>0 但 diff --quiet 为 0 → 'Diff is empty' 路径确实独立于 AC-1 的无提交路径，分类边界清晰。"
+  ],
+  "scope_violation": "none",
+  "recommended_next_state": "READY_FOR_HUMAN_REVIEW"
+}
