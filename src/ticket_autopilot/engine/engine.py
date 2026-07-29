@@ -25,7 +25,12 @@ import os
 from types import SimpleNamespace
 
 from . import drivers
-from .guardrails import GuardrailPolicy
+from .guardrails import (
+    DEVELOPER_TOOL_WHITELIST,
+    GuardrailPolicy,
+    RunExecutionContext,
+    normalise_role,
+)
 
 
 class WorkflowError(Exception):
@@ -68,7 +73,15 @@ def _resolve(value, ctx):
 # ----------------------------------------------------------------------------
 
 class Engine:
-    def __init__(self, workflow: dict, mock: bool = False, hooks: dict | None = None):
+    def __init__(
+        self,
+        workflow: dict,
+        mock: bool = False,
+        hooks: dict | None = None,
+        *,
+        run_context: RunExecutionContext | object | None = None,
+        developer_policy: GuardrailPolicy | None = None,
+    ):
         self.wf = workflow
         self.mock = mock
         self.hooks = hooks or {}
@@ -77,6 +90,8 @@ class Engine:
         self.vars = workflow.get("vars", {})
         guardrail_config = workflow.get("guardrails", self.vars.get("guardrails"))
         self.guardrail_policy = GuardrailPolicy.from_config(guardrail_config)
+        self.run_context = _coerce_run_context(run_context)
+        self.developer_policy = developer_policy
         self.params_spec = workflow.get("params", {})
         self.mock_cfg = workflow.get("mock", {})
         self._mock_attempts: dict[str, int] = {}
@@ -203,9 +218,19 @@ class Engine:
         if driver == "llm":
             return drivers.llm_call(agent, inputs, node)
         if driver == "cli":
+            role = normalise_role(node.get("role") or agent.get("role") or node.get("agent"))
+            policy = self.guardrail_policy
+            if role == "developer" and self.run_context is not None:
+                # Dynamic write access is scoped to this one disposable worktree;
+                # it never mutates the workflow's strict AIO-9 default policy.
+                policy = self.developer_policy or GuardrailPolicy(
+                    allowed_roots=[self.run_context.worktree],
+                    read_only=False,
+                    tool_whitelist=list(DEVELOPER_TOOL_WHITELIST),
+                )
             return drivers.cli_call(
-                agent, inputs, node, engine_root=_engine_root(),
-                policy=self.guardrail_policy,
+                agent, inputs, node, engine_root=_engine_root(), policy=policy,
+                run_context=self.run_context,
             )
         if driver == "hermes":
             # dispatch a full Hermes sub-agent via the gateway. The Engine keeps the
@@ -229,6 +254,24 @@ class Engine:
             return {"decision": "accept",
                     "reason": cfg.get("accept_reason", "mock accept after retries")}
         return f"mock output for {node['id']}"
+
+
+def _coerce_run_context(value: RunExecutionContext | object | None) -> RunExecutionContext | None:
+    if value is None or isinstance(value, RunExecutionContext):
+        return value
+    execution_context = getattr(value, "execution_context", None)
+    if callable(execution_context):
+        candidate = execution_context()
+        if isinstance(candidate, RunExecutionContext):
+            return candidate
+    if isinstance(value, dict):
+        try:
+            return RunExecutionContext(
+                run_id=value["run_id"], worktree=value["worktree"], branch=value["branch"]
+            )
+        except (KeyError, TypeError) as exc:
+            raise WorkflowError("run_context must contain run_id, worktree, and branch") from exc
+    raise WorkflowError("run_context must be a RunExecutionContext or Run record")
 
 
 def _engine_root() -> str:
