@@ -14,7 +14,7 @@ import errno
 import json
 import os
 import sys
-from typing import Any
+from typing import Any, Callable
 
 from ticket_autopilot.services.ticket_controller import (
     ControllerError,
@@ -66,44 +66,42 @@ def _print(value: dict[str, Any], *, stream=None) -> None:
     print(json.dumps(value, sort_keys=True, default=str), file=stream or sys.stdout)
 
 
-def _isolate_run_process_group() -> int | None:
-    """Give an active Run a group that cancel can terminate without the shell.
+def _run_in_isolated_process(run: Callable[[], int]) -> int:
+    """Execute ``run`` in a process group cancel can safely terminate.
 
-    ``setsid`` rejects a process-group leader.  The console script can itself
-    be that leader when invoked by an interactive shell, so retry in a forked
-    child (which is not a group leader).  The parent only relays the child's
-    exit code; all workflow I/O and Run ownership stay in the isolated child.
+    ``setsid`` rejects a process-group leader.  In that case a fork child can
+    create the session.  Crucially the child calls :func:`os._exit` after the
+    callback: returning would resume an embedding caller's stack (for example
+    pytest) and could make the parent relay an unrelated successful exit code.
     """
     if os.name != "posix":
         raise ControllerError("RUN_ISOLATION_FAILED", "safe Run cancellation requires a POSIX process group")
     try:
         os.setsid()
-        return None
     except OSError as exc:
         if exc.errno != errno.EPERM:
             raise ControllerError("RUN_ISOLATION_FAILED", f"could not isolate Run process group: {exc}") from exc
-    try:
-        child_pid = os.fork()
-    except OSError as exc:
-        raise ControllerError("RUN_ISOLATION_FAILED", f"could not create isolated Run process: {exc}") from exc
-    if child_pid:
-        _, wait_status = os.waitpid(child_pid, 0)
-        return os.waitstatus_to_exitcode(wait_status)
-    try:
-        os.setsid()
-    except OSError as exc:  # Defensive: a fork child should never be a group leader.
-        raise ControllerError("RUN_ISOLATION_FAILED", f"could not isolate forked Run process: {exc}") from exc
-    return None
+        try:
+            child_pid = os.fork()
+        except OSError as fork_error:
+            raise ControllerError("RUN_ISOLATION_FAILED", f"could not create isolated Run process: {fork_error}") from fork_error
+        if child_pid:
+            _, wait_status = os.waitpid(child_pid, 0)
+            return os.waitstatus_to_exitcode(wait_status)
+        try:
+            os.setsid()
+        except OSError as child_error:  # Defensive: a fork child is not a group leader.
+            _print({"status": "ERROR", "code": "RUN_ISOLATION_FAILED", "error": f"could not isolate forked Run process: {child_error}"}, stream=sys.stderr)
+            os._exit(EXIT_RUNTIME_ERROR)
+        exit_code = run()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(exit_code)
+    return run()
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+def _dispatch(args: argparse.Namespace) -> int:
     try:
-        if args.command == "run":
-            child_exit = _isolate_run_process_group()
-            if child_exit is not None:
-                return child_exit
         controller = TicketController(args.repository)
         if args.command == "run":
             result = controller.run(args.issue_key)
@@ -125,6 +123,14 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_RUNTIME_ERROR
     _print(result)
     return _exit_code(result)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "run":
+        return _run_in_isolated_process(lambda: _dispatch(args))
+    return _dispatch(args)
 
 
 if __name__ == "__main__":
