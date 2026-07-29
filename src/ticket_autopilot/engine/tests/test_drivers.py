@@ -109,7 +109,7 @@ class TestCliDriver(unittest.TestCase):
             "driver": "cli",
             "command": "qodercli",
             "cwd": "sandbox",
-            "permission_mode": "default",
+            "permission_mode": "read-only",
             "tools": ["Read", "Glob", "Grep"],
             "tools_flag": "--tools",
             "tools_as_args": True,
@@ -125,7 +125,7 @@ class TestCliDriver(unittest.TestCase):
         self.assertEqual(result, {"decision": "accept", "reason": "ok"})
         command = run.call_args.args[0]
         self.assertEqual(command[0], "qodercli")
-        self.assertEqual(command[command.index("--permission-mode") + 1], "default")
+        self.assertEqual(command[command.index("--permission-mode") + 1], "read-only")
         tools_at = command.index("--tools")
         self.assertEqual(command[tools_at + 1:tools_at + 4], ["Read", "Glob", "Grep"])
         self.assertNotIn("--allowedTools", command)

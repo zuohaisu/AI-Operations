@@ -161,6 +161,7 @@ class TestRunQa(unittest.TestCase):
         qa.run_qa(plan="p", result="r")
         agent = cli_call.call_args.args[0]
         self.assertEqual(agent["command"], "qodercli")
+        self.assertEqual(agent["permission_mode"], "read-only")
         self.assertEqual(agent["tools"], ["Read", "Glob", "Grep"])
         self.assertEqual(agent["cwd"], "sandbox")
         # non-interactive read-only policy: auto-approve reads only, never writes

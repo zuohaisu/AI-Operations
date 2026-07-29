@@ -23,11 +23,15 @@ import subprocess
 import sys
 import urllib.request
 
-DEFAULT_ALLOWED_ROOTS = ["sandbox"]  # relative to engine root; strict default
-
-
-class SecurityError(Exception):
-    pass
+from .guardrails import (
+    DEFAULT_ALLOWED_ROOTS,
+    DEFAULT_TOOL_WHITELIST,
+    GuardrailPolicy,
+    SecurityError,
+    check_cwd,
+    check_permission_mode,
+    check_tools,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -144,19 +148,32 @@ def hermes_call(agent: dict, inputs: dict, node: dict, mock: bool = False) -> ob
 # ---------------------------------------------------------------------------
 
 def _resolve_within_root(relpath: str, engine_root: str, allowed_roots) -> str:
-    roots = [os.path.join(engine_root, r) for r in allowed_roots]
-    target = os.path.abspath(os.path.join(engine_root, relpath))
-    if not any(os.path.commonpath([target, r]) == r for r in roots):
-        raise SecurityError(
-            f"cwd '{target}' is outside allowed roots {roots}. "
-            "Refusing to spawn CLI outside the designated directory."
-        )
-    return target
+    """Backward-compatible path helper backed by the shared policy check."""
+    return check_cwd(
+        relpath,
+        engine_root,
+        GuardrailPolicy(allowed_roots=list(allowed_roots)),
+    )
 
 
-def cli_call(agent: dict, inputs: dict, node: dict, engine_root: str) -> object:
-    allowed_roots = agent.get("allowed_roots", DEFAULT_ALLOWED_ROOTS)
-    cwd = _resolve_within_root(agent.get("cwd", "sandbox"), engine_root, allowed_roots)
+def _direct_call_policy(agent: dict) -> GuardrailPolicy:
+    """Support direct callers while Engine workflow policy remains authoritative."""
+    return GuardrailPolicy.from_config({
+        "allowed_roots": agent.get("allowed_roots", DEFAULT_ALLOWED_ROOTS),
+        "read_only": agent.get("read_only", True),
+        "tool_whitelist": agent.get("tool_whitelist", DEFAULT_TOOL_WHITELIST),
+    })
+
+
+def cli_call(agent: dict, inputs: dict, node: dict, engine_root: str,
+             policy: GuardrailPolicy | None = None) -> object:
+    """Run a CLI only after deterministic Engine guardrail checks pass."""
+    policy = policy or _direct_call_policy(agent)
+    cwd = check_cwd(agent.get("cwd", "sandbox"), engine_root, policy)
+    permission_mode = agent.get("permission_mode", "read-only")
+    tools = agent.get("tools", [])
+    check_permission_mode(permission_mode, policy)
+    check_tools(tools, policy)
 
     prompt = _format_prompt(inputs)
     system = agent.get("system", "")
@@ -173,8 +190,6 @@ def cli_call(agent: dict, inputs: dict, node: dict, engine_root: str) -> object:
                for part in argv]
     else:
         command = agent.get("command", "claude")
-        permission_mode = agent.get("permission_mode", "read-only")
-        tools = agent.get("tools", [])
         # claude expects `--allowedTools a,b`; qodercli expects variadic `--tools a b`.
         tools_flag = agent.get("tools_flag", "--allowedTools")
         tools_as_args = agent.get("tools_as_args", False)

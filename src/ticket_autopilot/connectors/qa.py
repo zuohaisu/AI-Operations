@@ -33,15 +33,14 @@ acceptance_criterion_id, summary, evidence, required_fix}) where evidence is a
 JSON OBJECT (not a string/array), e.g. {"file": "...", "observed": "...", "expected": "..."},
 non_blocking_comments (array), recommended_next_state."""
 
-# read-only guardrails: qodercli has no read-only permission mode, so the
-# restricted tool set is the enforcement (same rationale as the workflow YAML).
-# --allowed-tools auto-approves ONLY the read tools in non-interactive -p mode
-# (verified live: reads succeed, writes are denied and no file is created).
+# Engine policy requires every CLI invocation to declare read-only. The
+# restricted tool set is a second boundary for qodercli's non-interactive mode.
+# --allowed-tools auto-approves ONLY the read tools in non-interactive -p mode.
 QA_AGENT = {
     "driver": "cli",
     "command": "qodercli",
     "cwd": "sandbox",
-    "permission_mode": "default",
+    "permission_mode": "read-only",
     "tools": ["Read", "Glob", "Grep"],
     "tools_flag": "--tools",
     "tools_as_args": True,

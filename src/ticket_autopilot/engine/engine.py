@@ -25,6 +25,7 @@ import os
 from types import SimpleNamespace
 
 from . import drivers
+from .guardrails import GuardrailPolicy
 
 
 class WorkflowError(Exception):
@@ -74,6 +75,8 @@ class Engine:
         self.agents = workflow.get("agents", {})
         self.edges = workflow.get("edges", [])
         self.vars = workflow.get("vars", {})
+        guardrail_config = workflow.get("guardrails", self.vars.get("guardrails"))
+        self.guardrail_policy = GuardrailPolicy.from_config(guardrail_config)
         self.params_spec = workflow.get("params", {})
         self.mock_cfg = workflow.get("mock", {})
         self._mock_attempts: dict[str, int] = {}
@@ -182,6 +185,10 @@ class Engine:
 
         try:
             return self._dispatch(agent, inputs, node)
+        except drivers.SecurityError:
+            # A denied capability is a policy failure, not an availability
+            # failure; never use a fallback to bypass a security boundary.
+            raise
         except Exception as exc:
             fallback_name = agent.get("fallback")
             if not fallback_name:
@@ -196,7 +203,10 @@ class Engine:
         if driver == "llm":
             return drivers.llm_call(agent, inputs, node)
         if driver == "cli":
-            return drivers.cli_call(agent, inputs, node, engine_root=_engine_root())
+            return drivers.cli_call(
+                agent, inputs, node, engine_root=_engine_root(),
+                policy=self.guardrail_policy,
+            )
         if driver == "hermes":
             # dispatch a full Hermes sub-agent via the gateway. The Engine keeps the
             # deterministic loop + guardrails; Hermes owns execution.

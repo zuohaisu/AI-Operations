@@ -74,6 +74,11 @@ name: ticket-pipeline
 vars:
   max_retries: 5            # QA retry cap (user: real manual max seen = 7; use 5)
 
+guardrails:                 # workflow-wide CLI capability boundary
+  allowed_roots: [sandbox]
+  read_only: true
+  tool_whitelist: [Read, Glob, Grep]
+
 agents:                     # persona / driver registry
   planner:
     driver: llm
@@ -125,6 +130,7 @@ edges:
 | Key | Meaning |
 |---|---|
 | `vars` | reusable constants, referenced as `${vars.x}` |
+| `guardrails` | workflow-wide CLI policy: `allowed_roots`, `read_only`, and `tool_whitelist`; omitted keys use strict defaults |
 | `agents.<name>.driver` | `llm` \| `cli` \| `hermes` \| `script` (mock mode is an Engine flag, not a driver) |
 | `agents.<name>.system` | system prompt for llm/cli |
 | `agents.<name>.expect` | `json` → parse agent output as JSON (verifier) |
@@ -151,7 +157,7 @@ unknown driver raises `WorkflowError("unknown driver: <name>")`.
 | Driver | Function and required YAML fields | Configuration | Return value |
 |---|---|---|---|
 | `llm` | `llm_call(agent, inputs, node)`; `driver: llm` | Requires `XY_LLM_BASE_URL`, `XY_LLM_API_KEY`, and `XY_LLM_MODEL`, unless `agents.<name>.model` supplies the model. `system` and `temperature` are optional. | Assistant text, or a decoded JSON value when `expect: json`. JSON fenced in a ```json block is accepted. |
-| `cli` | `cli_call(agent, inputs, node, engine_root)`; `driver: cli` | Optional `command` (default `claude`), `cwd` (default `sandbox`), `allowed_roots` (default `[sandbox]`), `permission_mode` (default `read-only`), `tools`, and `system`. | Trimmed CLI stdout, or decoded JSON when `expect: json`. A cwd outside an allowed root raises `SecurityError` before spawning. |
+| `cli` | `cli_call(agent, inputs, node, engine_root, policy)`; `driver: cli` | Optional `command` (default `claude`), `cwd` (default `sandbox`), `permission_mode` (default `read-only`), `tools`, and `system`; the Engine supplies the workflow `guardrails` policy. | Trimmed CLI stdout, or decoded JSON when `expect: json`. A cwd outside an allowed root, non-read-only request under a read-only policy, or non-whitelisted tool raises `SecurityError` before spawning. |
 | `hermes` | `hermes_call(agent, inputs, node, mock=False)`; `driver: hermes` | `HERMES_API_URL` defaults to `http://localhost:8642/v1`; optional `HERMES_API_KEY`, `HERMES_MODEL` (default `hermes-agent`), and `HERMES_SESSION_KEY`. Agent `model` and `session_key` override their environment counterparts. | Assistant text, or decoded JSON when `expect: json`. Calling the driver itself with `mock=True` returns a marker dict and does not contact the gateway. Engine real-mode dispatch always passes `mock=False`. |
 | `script` | `script_call(agent, inputs, engine_root)`; `driver: script`, `entry: name` | Loads `engine/handlers/<entry>.py`, then calls `<entry>(**inputs)`. `entry` is required. | Exactly the handler function's return value. |
 
@@ -163,15 +169,19 @@ All network-facing driver calls use an OpenAI-compatible
 The `cli` driver spawns an external CLI (default `claude`) inside a **strict
 sandbox**:
 
-- **cwd restriction** — `cwd` must resolve *inside* an allowed root
+- **cwd restriction** — `cwd` must resolve *inside* `guardrails.allowed_roots`
   (`sandbox/` by default). Attempting to point it outside raises
-  `SecurityError` before anything spawns. See `tests/test_engine.py`
-  (`test_cwd_outside_allowed_root_is_rejected`).
-- **tools allowlist** — passed via `--allowedTools` (e.g. `Read,Glob,Grep`).
-- **read-only** — `--permission-mode read-only` by default.
+  `SecurityError` before anything spawns.
+- **tools allowlist** — every requested `agent.tools` value must be in
+  `guardrails.tool_whitelist`, then it is passed to the CLI.
+- **read-only** — when `guardrails.read_only` is true (the default), every CLI
+  node must request `permission_mode: read-only`; any other mode is rejected
+  before spawning.
 
-To relax later (user: "you open it up afterwards"), widen `tools`, set
-`permission_mode: default`, or expand `allowed_roots` in `drivers.py`.
+Policy is configured on the workflow, so agents can request fewer capabilities
+but cannot relax its boundary. To intentionally relax it, update the workflow's
+`guardrails` mapping (for example, add a tool to `tool_whitelist` or set
+`read_only: false`) and review that change as a security-boundary change.
 
 ## Hermes as the execution backend (compose, don't rewrite)
 

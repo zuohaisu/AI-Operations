@@ -23,6 +23,11 @@ vars:
                           # use 5; usually passes in 1-2 retries.
   ticket_context: ""      # stub — AIO-8 connector fills this from the Plane ticket
 
+guardrails:
+  allowed_roots: [sandbox]
+  read_only: true
+  tool_whitelist: [Read, Glob, Grep]
+
 agents:
   planner:
     driver: cli
