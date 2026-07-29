@@ -77,7 +77,12 @@
       "required": ["max_fix_attempts", "allow_main_push"],
       "properties": {
         "max_fix_attempts": {"type": "integer", "minimum": 0},
-        "allow_main_push": {"type": "boolean", "enum": [false]}
+        "allow_main_push": {"type": "boolean", "enum": [false]},
+        "forbidden_paths": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "max_changed_files": {"type": "integer", "minimum": 1}
       }
     },
     "provenance": {
