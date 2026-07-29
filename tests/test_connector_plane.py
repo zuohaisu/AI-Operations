@@ -70,6 +70,28 @@ class PlaneConnectorTests(unittest.TestCase):
         self.assertEqual(result, {"closed": True})
         close.assert_called_once_with("issue-1", "## Plan\nplan\n\n## Execute result\nresult\n")
 
+    def test_set_ticket_state_supports_in_review_without_done_semantics(self):
+        calls = []
+
+        def request(method, path, **kwargs):
+            calls.append((method, path, kwargs.get("body")))
+            if path.endswith("/comments/"):
+                return 201, {"id": "comment-1"}
+            if path.endswith("/states/"):
+                return 200, {"results": [{"id": "review-uuid", "name": "In Review"}]}
+            return 200, {"id": "issue-1", "state": "review-uuid"}
+
+        with mock.patch("ticket_autopilot.connectors.plane._request", side_effect=request):
+            result = plane.set_ticket_state(
+                "issue-1", "In Review", "PR/Run/Checks/QA evidence",
+                workspace="hspace", project_id="aio-project", api_key="secret",
+            )
+
+        self.assertTrue(result["updated"])
+        self.assertEqual(result["state_name"], "In Review")
+        self.assertEqual([call[0] for call in calls], ["POST", "GET", "PATCH"])
+        self.assertEqual(calls[-1][2], {"state": "review-uuid"})
+
     def test_close_ticket_comments_then_uses_project_done_state_and_state_field(self):
         calls = []
 

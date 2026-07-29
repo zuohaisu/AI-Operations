@@ -202,9 +202,12 @@ def build_workflow_yaml(issue: dict[str, Any]) -> dict[str, Any]:
     return workflow
 
 
-def _find_done_state(
-    *, workspace: str, project_id: str, api_key: str
+def _find_state(
+    state_name: str, *, workspace: str, project_id: str, api_key: str
 ) -> str:
+    """Resolve an explicit human-visible Plane state name in this project."""
+    if not state_name or not state_name.strip():
+        raise ValueError("state_name is required")
     status, payload = _request(
         "GET",
         f"/projects/{project_id}/states/",
@@ -217,13 +220,18 @@ def _find_done_state(
     if not isinstance(states, list):
         raise PlaneAPIError(f"list states for project {project_id} returned invalid data: {payload}")
 
+    wanted = state_name.strip().casefold()
     for state in states:
-        if str(state.get("name", "")).casefold() == "done" and state.get("id"):
+        if str(state.get("name", "")).casefold() == wanted and state.get("id"):
             return state["id"]
-    for state in states:
-        if str(state.get("group", "")).casefold() == "completed" and state.get("id"):
-            return state["id"]
-    raise PlaneAPIError(f"project {project_id} has no Done/completed state")
+    # Plane installations sometimes label Done with a localized name but retain
+    # the completed group.  Never use a group fallback for In Review/Blocked:
+    # those names carry workflow semantics and must be configured explicitly.
+    if wanted == "done":
+        for state in states:
+            if str(state.get("group", "")).casefold() == "completed" and state.get("id"):
+                return state["id"]
+    raise PlaneAPIError(f"project {project_id} has no state named {state_name!r}")
 
 
 def _add_comment(
@@ -250,15 +258,20 @@ def _add_comment(
     raise AssertionError("unreachable")  # pragma: no cover
 
 
-def close_ticket(
+def set_ticket_state(
     issue_id: str,
+    state_name: str,
     summary: str,
     *,
     workspace: str = DEFAULT_WORKSPACE,
     project_id: str = DEFAULT_PROJECT_ID,
     api_key: str | None = None,
 ) -> dict[str, Any]:
-    """Add a closure summary and move the issue to that project's Done state."""
+    """Post retained evidence then move an issue to an explicit Plane state.
+
+    The caller chooses ``In Review`` or ``Blocked`` for the AIO-13 loop.  This
+    adapter never infers Done and never represents an HTTP failure as success.
+    """
     if not issue_id:
         raise ValueError("issue_id is required")
     if not summary:
@@ -267,15 +280,34 @@ def close_ticket(
     comment = _add_comment(
         issue_id, summary, workspace=workspace, project_id=project_id, api_key=key
     )
-    done_state = _find_done_state(workspace=workspace, project_id=project_id, api_key=key)
+    state_id = _find_state(state_name, workspace=workspace, project_id=project_id, api_key=key)
     status, issue = _request(
         "PATCH",
         f"/projects/{project_id}/issues/{issue_id}/",
         workspace=workspace,
         api_key=key,
-        body={"state": done_state},  # Plane PATCH intentionally uses state, not state_id.
+        body={"state": state_id},  # Plane PATCH intentionally uses state, not state_id.
     )
     if status not in (200, 201) or not isinstance(issue, dict):
-        raise PlaneAPIError(f"close_ticket {issue_id} failed: HTTP {status} {issue}")
-    return {"closed": True, "ticket_id": issue_id, "state": done_state,
-            "comment": comment, "issue": issue}
+        raise PlaneAPIError(f"set_ticket_state {issue_id} failed: HTTP {status} {issue}")
+    return {"updated": True, "ticket_id": issue_id, "state_name": state_name,
+            "state": state_id, "comment": comment, "issue": issue}
+
+
+def close_ticket(
+    issue_id: str,
+    summary: str,
+    *,
+    workspace: str = DEFAULT_WORKSPACE,
+    project_id: str = DEFAULT_PROJECT_ID,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    """Legacy AIO-8 compatibility wrapper; AIO-13 never calls this path."""
+    result = set_ticket_state(
+        issue_id, "Done", summary, workspace=workspace, project_id=project_id, api_key=api_key,
+    )
+    return {"closed": True, **result}
+
+
+# A verb-first alias is convenient for callers that refer to Plane's API action.
+update_ticket_state = set_ticket_state

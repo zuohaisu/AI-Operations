@@ -50,12 +50,14 @@ QA_AGENT = {
 }
 
 
-def _blocked_verdict(reason: str, raw: object = None) -> dict:
+def _blocked_verdict(
+    reason: str, raw: object = None, *, issue_key: str = "UNKNOWN", run_id: str = "UNKNOWN", qa_attempt: int = 0,
+) -> dict:
     return {
         "schema_version": "1.0",
-        "issue_key": "UNKNOWN",
-        "run_id": "UNKNOWN",
-        "qa_attempt": 0,
+        "issue_key": issue_key,
+        "run_id": run_id,
+        "qa_attempt": qa_attempt,
         "verdict": "BLOCKED",
         "acceptance_criteria": [],
         "findings": [{
@@ -73,11 +75,22 @@ def _blocked_verdict(reason: str, raw: object = None) -> dict:
 
 
 def run_qa(plan=None, result=None, ticket_context=None, agent=None,
-           engine_root=None) -> dict:
+           engine_root=None, *, ticket_spec=None, diff=None, test_evidence=None,
+           run_id=None, qa_attempt=None) -> dict:
     agent = agent or QA_AGENT
     engine_root = engine_root or _PKG_ROOT
+    issue_key = (ticket_spec or {}).get("issue_key", "UNKNOWN")
+    effective_run_id = run_id or "UNKNOWN"
+    effective_attempt = qa_attempt if isinstance(qa_attempt, int) else 0
     inputs = {
-        "ticket_context": ticket_context or "(no ticket context provided yet — AIO-8 fills this)",
+        # AIO-13 passes the unmodified input contract, base-to-head Diff, and
+        # deterministic command evidence.  Legacy Engine use remains supported.
+        "ticket_context": ticket_context or ticket_spec or "(no ticket context provided yet — AIO-8 fills this)",
+        "ticket_spec": ticket_spec,
+        "base_to_head_diff": diff,
+        "test_evidence": test_evidence,
+        "run_id": effective_run_id,
+        "qa_attempt": effective_attempt,
         "plan": plan,
         "result": result,
     }
@@ -85,22 +98,27 @@ def run_qa(plan=None, result=None, ticket_context=None, agent=None,
     try:
         raw = drivers.cli_call(agent, inputs, {"agent": "verifier"}, engine_root)
     except Exception as exc:  # CLI crash / non-zero exit / timeout / bad JSON
-        return {"decision": "reject",
-                "verdict": _blocked_verdict(f"QA CLI failed: {exc}")}
+        return {"decision": "reject", "verdict": _blocked_verdict(
+            f"QA CLI failed: {exc}", issue_key=issue_key, run_id=effective_run_id,
+            qa_attempt=effective_attempt,
+        )}
 
     verdict = raw
     if isinstance(verdict, str):
         try:
             verdict = json.loads(verdict)
         except json.JSONDecodeError:
-            return {"decision": "reject",
-                    "verdict": _blocked_verdict("QA output is not JSON", raw)}
+            return {"decision": "reject", "verdict": _blocked_verdict(
+                "QA output is not JSON", raw, issue_key=issue_key,
+                run_id=effective_run_id, qa_attempt=effective_attempt,
+            )}
 
     valid, errors = validate_verdict(verdict)
     if not valid:
         return {"decision": "reject",
                 "verdict": _blocked_verdict(
-                    f"qa-verdict schema validation failed: {'; '.join(errors)}", verdict)}
+                    f"qa-verdict schema validation failed: {'; '.join(errors)}", verdict,
+                    issue_key=issue_key, run_id=effective_run_id, qa_attempt=effective_attempt)}
 
     if verdict["verdict"] == "PASS":
         # §9.3: PASS requires every AC to pass and no blocker/major finding.
@@ -113,7 +131,8 @@ def run_qa(plan=None, result=None, ticket_context=None, agent=None,
                     "verdict": _blocked_verdict(
                         "PASS verdict is self-contradictory: "
                         f"non-PASS acceptance criteria {failed_acs}, "
-                        f"blocker/major findings {severe}", verdict)}
+                        f"blocker/major findings {severe}", verdict,
+                        issue_key=issue_key, run_id=effective_run_id, qa_attempt=effective_attempt)}
 
     decision = "accept" if verdict["verdict"] == "PASS" else "reject"
     return {"decision": decision, "verdict": verdict}

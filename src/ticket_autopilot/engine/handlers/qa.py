@@ -3,5 +3,6 @@
 from ticket_autopilot.connectors.qa import run_qa
 
 
-def qa(plan=None, result=None, ticket_context=None):
-    return run_qa(plan=plan, result=result, ticket_context=ticket_context)
+def qa(plan=None, result=None, ticket_context=None, **context):
+    """Forward legacy Engine inputs plus the AIO-13 QA evidence bundle."""
+    return run_qa(plan=plan, result=result, ticket_context=ticket_context, **context)
