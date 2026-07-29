@@ -152,6 +152,15 @@ class RunManager:
 
     get_run = load_run
 
+    def update_state(self, run: RunRecord | str, state: str) -> RunRecord:
+        """Persist a lifecycle state only after reloading the owned Run record."""
+        if not isinstance(state, str) or not state:
+            raise RunManagerError("Run state must be a non-empty string")
+        record = self.load_run(run if isinstance(run, str) else run.run_id)
+        updated = RunRecord(**{**asdict(record), "state": state, "updated_at": _timestamp()})
+        self._write_state(updated)
+        return updated
+
     def developer_policy(self, run: RunRecord | str) -> GuardrailPolicy:
         """The only policy that permits mutation: the exact disposable worktree."""
         record = self.load_run(run if isinstance(run, str) else run.run_id)

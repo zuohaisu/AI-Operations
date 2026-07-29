@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -33,24 +34,12 @@ class PlaneAPIError(RuntimeError):
 
 
 def resolve_api_key(api_key: str | None = None) -> str:
-    """Resolve a Plane key without storing or printing its value."""
+    """Resolve a Plane key from an explicit argument or the environment only."""
     if api_key:
         return api_key
     if key := os.environ.get("PLANE_API_KEY"):
         return key
-
-    config_path = Path("~/.workbuddy/mcp.json").expanduser()
-    try:
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-        key = config["mcpServers"]["plane"]["env"]["PLANE_API_KEY"]
-    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise PlaneAPIError(
-            "Plane API key is required: set PLANE_API_KEY or configure "
-            "~/.workbuddy/mcp.json."
-        ) from exc
-    if not key:
-        raise PlaneAPIError("Plane API key is empty.")
-    return key
+    raise PlaneAPIError("Plane API key is required: set PLANE_API_KEY.")
 
 
 def _base_url(workspace: str) -> str:
@@ -125,6 +114,39 @@ def _request(
                 continue
 
     raise PlaneAPIError(f"Plane {method} {path} failed after {retries} attempts: {last_error}")
+
+
+def fetch_issue_by_identifier(
+    identifier: str,
+    *,
+    workspace: str = DEFAULT_WORKSPACE,
+    project_id: str = DEFAULT_PROJECT_ID,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    """Read exactly one Plane issue by its human ticket identifier.
+
+    The product CLI accepts keys such as ``AIO-14`` rather than opaque UUIDs.
+    Ambiguous or absent search results are errors, never a guessed selection.
+    """
+    if not identifier:
+        raise ValueError("identifier is required")
+    key = resolve_api_key(api_key)
+    status, payload = _request(
+        "GET", f"/projects/{project_id}/issues/?search={urllib.parse.quote(identifier)}",
+        workspace=workspace, api_key=key,
+    )
+    issues = payload.get("results", []) if isinstance(payload, dict) else payload
+    if status != 200 or not isinstance(issues, list):
+        raise PlaneAPIError(f"search issues for {identifier} failed: HTTP {status} {payload}")
+    matches = [issue for issue in issues if isinstance(issue, dict) and str(
+        issue.get("identifier") or issue.get("issue_key") or issue.get("key") or ""
+    ).casefold() == identifier.casefold()]
+    if len(matches) != 1:
+        raise PlaneAPIError(f"expected exactly one Plane issue for {identifier}, found {len(matches)}")
+    issue_id = matches[0].get("id")
+    if not issue_id:
+        raise PlaneAPIError(f"Plane issue {identifier} has no id")
+    return fetch_issue(str(issue_id), workspace=workspace, project_id=project_id, api_key=key)
 
 
 def fetch_issue(

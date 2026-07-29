@@ -78,11 +78,47 @@ AI-Operations/
 - **遗留名已清除**：`vff` / `vivarium` / `forge_flow` / `forge-flow` / `Forge Flow` 已从代码与文档全部移除。
 - **两个容易混淆的 `ticket-autopilot`**：`src/ticket_autopilot/` 是**源码包**；规格书/任务票里的 `.ticket-autopilot/` 是**运行期点文件夹**（worktree/run 目录），属规格定义、刻意保留，二者不是同一物。
 
-## 开发
+## 最短 Plane-first 本地路径
+
+Python 3.11+ 的干净环境中安装（`.[dev]` 仅用于运行测试）：
 
 ```bash
-pip install -e .
+python3.11 -m venv .venv  # 或任何 Python 3.11+ 解释器
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]'
 ticket-controller --help
+```
+
+配置只读入口与本地仓库；**所有 secret 只能来自环境变量**，不要写入配置文件或命令行：
+
+```bash
+export TICKET_AUTOPILOT_REPOSITORY="$PWD" # 本地 Git 仓库
+export PLANE_API_KEY='...'                 # Plane read/status write
+export GITHUB_TOKEN='...'                  # Draft PR creation
+# 可选：三种 Agent CLI 名称；默认 codex / claude / qodercli
+# export TICKET_AUTOPILOT_PLANNER_CLI=codex
+# export TICKET_AUTOPILOT_DEVELOPER_CLI=claude
+# export TICKET_AUTOPILOT_QA_CLI=qodercli
+```
+
+确认三个 Agent CLI 已在 `PATH` 后，按同一 Plane key 运行四个命令：
+
+```bash
+ticket-controller run AIO-15
+ticket-controller status AIO-15
+ticket-controller cancel AIO-15 --run-id <run_id>   # 仅 active Run
+ticket-controller cleanup AIO-15 --run-id <run_id>  # 仅确认的本地 disposable 资源
+```
+
+输出均为 JSON。只有 `IN_REVIEW` 和成功的 `CLEANED` 返回 0；`ACTIVE`、
+`BLOCKED_*`、`CANCELLED`、`STALLED` 均非 0。`cleanup` 保留 Run artifacts、
+controller log 和 QA/verifier 证据；它不会猜测 PID、分支或路径。没有 `resume`。
+
+运行本票隔离验证：
+
+```bash
+python -m pytest tests/test_cli.py tests/integration/test_cli_lifecycle.py -q
 ```
 
 任务票以 Plane 中按 [agent-ready ticket 模板](specs/agent-ready-ticket-template.md) 创建的工单为执行合同。`tasks/ticket-autopilot-v0.1-tasklist.md` 是历史任务清单，不作为当前架构依据。
