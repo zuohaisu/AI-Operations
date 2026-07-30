@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ticket Autopilot settings</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main>
+    <h1>Ticket Autopilot</h1>
+    <p class="lede">Local settings. Ticket execution is not enabled in this screen.</p>
+    <form id="settings">
+      <fieldset><legend>Plane</legend>
+        <label>Workspace <input name="workspace" autocomplete="off"></label>
+        <label>Project <input name="project" autocomplete="off"></label>
+        <label>API key <input name="api_key" type="password" autocomplete="off" placeholder="Not configured"></label>
+      </fieldset>
+      <fieldset><legend>Local repository</legend>
+        <label>Repository <input name="repository" autocomplete="off"></label>
+      </fieldset>
+      <fieldset><legend>Agent CLIs</legend>
+        <label>Planner <input name="planner" autocomplete="off" placeholder="codex"></label>
+        <label>Developer <input name="developer" autocomplete="off" placeholder="claude"></label>
+        <label>QA <input name="qa" autocomplete="off" placeholder="qodercli"></label>
+      </fieldset>
+      <button type="submit">Save settings</button>
+      <output id="result" aria-live="polite"></output>
+    </form>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
