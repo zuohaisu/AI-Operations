@@ -1,106 +1,98 @@
 # Closed-Loop Workflow Definition
 
-This is the authoritative **operational** definition for the Ticket Autopilot
-closed loop. `IDEA.md` remains the project charter and `AGENTS.md` remains the
-working charter; this document maps their stages to the repository's actual
-Engine and Connector entities. A stage is closed only when its stated evidence
-gate is met. A missing Connector or gate is `BLOCKED`, never evidence of
-success.
+This is the authoritative operational definition for the implemented **Phase 1
+Plane-first local Web workflow**. `IDEA.md` remains the product charter and
+`AGENTS.md` remains the working charter. Historical Engine, CLI and reference
+pipeline documents are not evidence that a Web capability is live.
 
-## Current boundary and reuse decision
+## Phase 1 boundary
 
-The existing reusable controller is `src/ticket_autopilot/engine/engine.py`:
-it interprets the declarative workflows and their conditional retry edge. The
-existing reusable Plane path is
-`src/ticket_autopilot/reference/ticket-pipeline/plane_client.py`, currently
-used only by `src/ticket_autopilot/engine/handlers/close_ticket.py`. Per
-`research/capability-audit.md`, `connectors/`, `services/`, and `schemas/` are
-empty scaffolds, and `src/ticket_autopilot/cli.py` is a stub. Do not replace the
-Engine with another controller.
+The user starts a localhost-only service with:
 
-The commands below are evidence inspections, not claims that an unimplemented
-stage is live. Use `PYTHONPATH=src python3 -m ticket_autopilot.engine run
-src/ticket_autopilot/workflows/ticket-pipeline.yaml --mock --params '{"ticket_id":"DEMO-1"}'` to
-exercise the existing Engine control flow without contacting Plane or an LLM.
+```bash
+python -m ticket_autopilot.web start
+```
 
-## Required stage mapping
+The service listens only on `127.0.0.1:8765`. The user supplies local Plane,
+repository and Agent CLI configuration in the browser. One repository has at
+most one active Run. A Run owns one Worktree and one local feature branch under
+the repository's `.ticket-autopilot/` directory.
 
-| Stage | Responsible entity and tool / command | How the current flow executes | Evidence gate |
-| --- | --- | --- | --- |
-| 1. Ticket intake and contract | **Current Plane adapter:** `src/ticket_autopilot/reference/ticket-pipeline/plane_client.py` (`get_issue` / `list_issues`), reused only by `src/ticket_autopilot/engine/handlers/close_ticket.py`. **Target:** `src/ticket_autopilot/connectors/plane.py` (not yet present). Inspect with `grep -n 'def get_issue' src/ticket_autopilot/reference/ticket-pipeline/plane_client.py; grep -n 'def list_issues' src/ticket_autopilot/reference/ticket-pipeline/plane_client.py`. | The YAML currently accepts only `params.ticket_id`; it has no intake node, ticket-contract schema, or structural validator. A future thin Plane Connector must read the issue and validate the contract before passing it to `plan`. | Required structured ticket fields are complete and validated. **Current status: BLOCKED**—the repository cannot produce this evidence yet. |
-| 2. Plan | `planner` agent, `plan` node, `driver: llm` in `src/ticket_autopilot/workflows/ticket-pipeline.yaml`; the Hermes alternative is the same `plan` node in `src/ticket_autopilot/workflows/ticket-pipeline-hermes.yaml`. Inspect with `grep -n 'id: plan' src/ticket_autopilot/workflows/ticket-pipeline*.yaml; grep -n 'driver: llm' src/ticket_autopilot/workflows/ticket-pipeline.yaml; grep -n 'driver: hermes' src/ticket_autopilot/workflows/ticket-pipeline-hermes.yaml`. | `Engine` resolves `${params.ticket_id}`, runs the planner, and captures its output as `nodes.plan`; the next forward edge enables `execute`. | A non-empty plan text is captured as the `plan` node output. It is not a validated ticket contract; a real run must not bypass the blocked intake gate. |
-| 3. Execute / development | `executor` agent and `execute` node in `src/ticket_autopilot/workflows/ticket-pipeline.yaml`; `src/ticket_autopilot/engine/drivers.py::cli_call` invokes `claude`. Its actual configuration is `cwd: ./sandbox`, `permission_mode: read-only`, and tools `Read`, `Glob`, `Grep`. `ticket-pipeline-hermes.yaml` is a Hermes variant whose sandbox is caller-enforced. Verify the CLI guardrail with `python3 -m unittest discover -s src/ticket_autopilot/engine/tests -v`. | `cli_call` resolves the cwd inside the allowed sandbox root, raises `SecurityError` before spawning a CLI outside it, passes `--permission-mode read-only`, and passes `--allowedTools`. The standard workflow therefore cannot write implementation changes. | The current evidence is the enforced sandbox, read-only mode, and tool allowlist, including the `SecurityError` test. This is a safety gate, **not** evidence of completed development; writable worktree/branch execution is still a future thin Connector. |
-| 4. Deterministic verification and independent QA | `verifier` agent and `verify` node in both workflow YAML files; standard driver is `llm` with `expect: json`. Inspect with `grep -n 'id: verify' src/ticket_autopilot/workflows/ticket-pipeline*.yaml; grep -n 'expect: json' src/ticket_autopilot/workflows/ticket-pipeline*.yaml; grep -n 'decision.*accept' src/ticket_autopilot/workflows/ticket-pipeline*.yaml`. | The verifier receives the captured plan and execute result and must return JSON with `decision` `accept` or `reject`; the Engine evaluates that decision on the outgoing edges. | Only `verdict.decision == accept` permits the current `close` edge. **Current status: incomplete**—this is an LLM verdict, not deterministic command evidence or independent Codex QA. The independent-QA upgrade belongs to the planned AIO-7 work and must not be represented as present. |
-| 5. Bounded fix loop | The `verify` → `execute` edge in both YAML workflows: `kind: loop`, `when: "nodes.verify.decision == 'reject'"`, and `max_retries: ${vars.max_retries}`; `vars.max_retries` is currently `5`. Inspect with `grep -n 'max_retries' src/ticket_autopilot/workflows/ticket-pipeline*.yaml; grep -n 'kind: loop' src/ticket_autopilot/workflows/ticket-pipeline*.yaml; grep -n 'nodes.verify.decision' src/ticket_autopilot/workflows/ticket-pipeline*.yaml`. | `Engine._fire_edges` increments the loop retry count and marks `execute` stale for another run only while below the cap. On exhaustion it stops firing that edge; it does not fabricate an accept or close result. | A reject can re-run execute no more than the configured cap. Exhaustion leaves `close` incomplete and is not success; current code does not yet write a `BLOCKED` ticket result. |
-| 6. Pull Request and CI evidence | `src/ticket_autopilot/connectors/github.py` creates Draft PRs and can merge only with a validated repository-owner authorization record. `GitWorktreeService.push_feature_branch` applies the same authorization boundary to a non-protected branch. `services/delivery_policy.py` distinguishes pending quality evidence, Diff splitting, owner override, and technical failure. | Pending QA or visual review may create a Draft PR with warnings. A protected-branch push is always rejected. Feature-branch push and merge require separate exact owner authorizations; an Agent cannot authorize either action. A mixed Diff becomes `DIFF_SPLIT_REQUIRED`, not `BLOCKED_REQUIREMENTS`, and must be mechanically isolated before PR creation. | Draft evidence = isolated head/base and PR URL. Review evidence = QA/visual statuses without fabricated PASS. Merge evidence = explicit owner authorization plus GitHub result. Only an actual credential/network/conflict/remote failure is `TECHNICAL_BLOCKED`. |
-| 7. Ticket status and result | `closer` agent and `close` node use `driver: script`, `entry: close_ticket`; `src/ticket_autopilot/engine/handlers/close_ticket.py::close_ticket` calls `plane_client.add_comment` then `plane_client.set_state(ticket_id, "done")`. Inspect with `grep -nE 'add_comment|set_state.*done' src/ticket_autopilot/engine/handlers/close_ticket.py`. | The `verify` accept edge invokes the script handler, which posts the plan/result comment and attempts to set the Plane ticket to done. It is the only current Engine node that touches Plane. | Plane comment and state-update calls complete successfully. **Current status: not safe for AIO closure:** the reused client has a hard-coded project ID identified in `research/capability-audit.md`; a parameterized Connector and preceding PR/CI/independent-QA evidence are required before this may close a real AIO ticket. |
+The Phase 1 success endpoint is a Controller-created **local** Commit after
+schema-valid QA PASS. It does not Push, create a PR, Merge, deploy, write Plane
+state, select another Ticket, run in parallel, or resume agent execution after
+the service restarts.
 
-## Mandatory goal check and retrospective verification
+## Implemented stage mapping
 
-Every work segment—research, planning, implementation, verification, review, or
-handoff—must begin its working update with exactly one concise line in this
-form, before any other substantive content:
+| Stage | Current implementation | Evidence gate |
+| --- | --- | --- |
+| 1. Ticket intake and contract | `connectors/plane.py`, `services/ticket_contract.py`, and `/api/tickets` list unfinished Plane work items and normalize Plane v2 fields. | Expanded Project matches local configuration; required structured sections parse into a schema-valid R0/R1 `ticket-spec`. |
+| 2. Prompt preparation | `services/prompt_resolver.py` and `/api/tickets/<id>/prepare` reuse exact `tasks/AIO-NNN-*` Prompts or call the configured Planner only for missing roles. | Both Developer and Acceptance Prompts are retained in a Run-owned artifact; Planner failure is a Hard Break and starts no Developer/QA. |
+| 3. Development invocation | `services/web_agent_loop.py` creates an owned Worktree/branch, then invokes the configured Developer in that Worktree. | A run ID, Worktree, branch, base SHA and append-only event exist before background work begins. |
+| 4. Deterministic verification and independent QA | Controller runs the Ticket's automated/query verification and required checks, then invokes QA with the Ticket, complete Diff, changed files and check evidence. | All checks exit 0, Diff is nonempty and safe, and QA returns a schema-valid verdict tied to the same run and attempt. |
+| 5. Bounded fix loop | QA FAIL provides the original findings to the next Developer invocation; each QA is a fresh attempt. | QA attempt is in `1..5`; fifth FAIL becomes `QA_EXHAUSTED` with no further Developer or Commit call. |
+| 6. Local Commit and delivery evidence | After QA PASS, Controller stages only ticket-owned changed files and creates an issue-keyed local Commit. Delivery policy records Owner decisions. | Commit SHA, branch, changed files and Timeline artifacts exist. Owner action records retain actor, action, approved_at and reason without rewriting QA facts. |
+| 7. Human escalation and retained evidence | The Web Timeline reads `events.jsonl` and state artifacts; it presents Hard Break, Retry, Stop, Finder and Owner-action controls. | Artifacts retain events, prompts, checks, QA verdicts and Commit evidence; secrets are redacted from API, UI and stored event payloads. |
+
+## User-visible workflow
 
 ```text
-[Goal check] This work advances <closed-loop stage> by <measurable evidence>.
+Plane Ticket
+  → readiness gate
+  → existing Prompt or Planner preparation
+  → owned Worktree / feature branch
+  → Developer → checks → independent QA
+  → up to four findings-only fixes and re-QA
+  → local Commit after PASS
+  → Timeline and human delivery decision
 ```
 
-If the line cannot name both a closed-loop stage and measurable evidence, stop
-and classify the request as a side track; ask for reprioritization. Repeat it
-when the deliverable changes, a subsystem is proposed, or work expands beyond
-the active ticket.
+`HARD_BREAK`, `BLOCKED`, `QA_EXHAUSTED`, `STOPPED` and normal PASS remain
+distinct. A browser closing does not remove the recorded Timeline, but it does
+not give a restarted service permission to recreate lost Agent process context.
 
-This is retrospectively checkable for any saved working update, transcript
-segment, plan, or handoff artifact. Check its first non-blank line with:
+## Actor-aware delivery authority
 
-```bash
-artifact=path/to/work-update.md
-awk 'NF {print; exit}' "$artifact" | grep -Ex '\[Goal check\] This work advances .+ by .+\.'
-```
+Safety boundaries apply to autonomous Agents, not the repository owner:
 
-The command exits `0` only when the first non-blank line has the required
-shape; a non-zero exit is a missing or malformed goal check. During review,
-record the artifact path and command result, confirm that the named stage is
-one of the seven stages above, and confirm that the cited evidence actually
-exists. This is an audit convention, not a CI gate.
+| Actor | Push / Draft PR / Merge |
+| --- | --- |
+| Developer or QA Agent | Never authorized. |
+| Controller in current Phase 1 Web UI | Records an Owner action only; performs no remote mutation. |
+| Repository Owner | May record visual acceptance, override, feature-branch push, Draft PR or merge intent with `actor`, `action`, `approved_at`, `reason`. |
 
-## Actor-aware authority and delivery states
-
-The repository owner is the human gate, not a subject blocked by it:
-
-| Actor / state | Feature-branch push | Draft PR | Merge |
-| --- | --- | --- | --- |
-| Developer or QA Agent acting autonomously | no | no | no |
-| Controller following the closed loop | only with explicit owner authorization | yes when the Diff is isolated; QA/visual pending remain warnings | no |
-| Repository owner explicit action | yes | yes | yes, with a separate auditable merge authorization |
-
-Canonical delivery states are `QA_PENDING`,
+Canonical delivery evidence includes `QA_PENDING`,
 `HUMAN_VISUAL_REVIEW_PENDING`, `READY_FOR_REVIEW`,
 `DIFF_SPLIT_REQUIRED`, `USER_OVERRIDE_APPROVED`,
-`MERGE_AUTHORIZED_BY_USER`, and `TECHNICAL_BLOCKED`. An override records the
-owner, action, time, and reason; it never rewrites deterministic, QA, or visual
-evidence to PASS. A branch-protection API `403` is not by itself proof that Git
-push credentials will fail; classify a technical blocker from the operation
-that actually failed.
+`MERGE_AUTHORIZED_BY_USER` and `TECHNICAL_BLOCKED`. An override never changes a
+failed or pending QA/visual event into PASS.
 
-## Explicit exclusions
+## Explicit exclusions and known limitation
 
-This definition describes the current v0.1 boundary and does **not** add or
-claim: resume, webhook triggers, parallel runs, Agent-authorized merge, automatic
-deploy, automatic migration, or automatic selection of the next ticket. PRs
-remain subject to repository-owner review and explicit merge authorization. Credentials, if a Connector
-uses them, are read from environment variables, Keychain, or existing `gh`
-authentication; they are never written into this workflow definition.
+Phase 1 excludes remote access, multiple users, webhooks, automatic Ticket
+selection, parallel Runs, arbitrary resume, automatic Push/PR/Merge/deploy and
+Plane writeback.
 
-## Deterministic verification commands
+The service lifecycle has one known defect: a randomly generated `service_id`
+can begin with `-`, which the child CLI may parse as an option rather than a
+value. The result is an intermittent startup health-check timeout. This is a
+release blocker for the "single-command stable startup" claim and must be fixed
+before treating the local Web entrypoint as production-ready.
+
+## Deterministic verification
 
 ```bash
-# Engine loop, input templating, CLI cwd guardrail, and Hermes dispatch tests
-python3 -m unittest discover -s src/ticket_autopilot/engine/tests -v
-
-# Confirm the mandatory convention is present in this authoritative definition
-grep -n 'Goal check' docs/closed-loop-workflow.md
+.venv/bin/python -m pytest \
+  tests/test_web_service.py \
+  tests/test_local_config.py \
+  tests/test_web_tickets.py \
+  tests/test_prompt_resolver.py \
+  tests/integration/test_web_agent_loop.py \
+  tests/test_web_run_tracking.py \
+  tests/integration/test_web_hard_break.py -q
 ```
 
-A test or evidence command that fails is `BLOCKED`; it must not be described as
-a completed stage.
+The test set uses fake Agents and temporary repositories. It proves the local
+contract, workflow and safety boundaries; a real Plane/Agent/GitHub delivery
+requires a separate live vertical-slice acceptance.

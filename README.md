@@ -1,124 +1,87 @@
 # Ticket Autopilot
 
-轻量本地控制器（Lightweight local controller）。把一张结构化的 Linear Ticket 自动跑成
-「已通过确定性验证 + 独立 AI QA」的 GitHub Pull Request。
+Ticket Autopilot 是一个供单人本机使用的 **Plane-first Web 控制器**：从一张结构化 Plane Ticket 开始，创建隔离 Worktree，驱动 Developer 与独立只读 QA，最多五轮修复，并只在 QA PASS 后创建本地 feature-branch Commit。
 
-> 仓库文件夹名暂为 `AI-Operations`，项目/工具名为 **Ticket Autopilot**。
-> 团队名 VF/VFF 不在本项目中使用。
+当前 Phase 1 的成功终点是可审计的本地 Commit 和完整 Run evidence；它**不会**自动 Push、创建 PR、Merge、部署或写回 Plane。最终交付节奏由 Repository Owner 决定。
 
-## 脚手架与工作入口
+## 现在能做什么
 
-| 资产 | 用途 |
-|---|---|
-| [AGENTS.md](AGENTS.md) / [IDEA.md](IDEA.md) | 北极星、强制 Goal check 与复用优先原则。 |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | 分支、PR、人工 review/merge 闸和工单状态约定。 |
-| [PR 模板](.github/PULL_REQUEST_TEMPLATE.md) | PR 的工单关联、范围、验收、验证和回滚证据。 |
-| [Agent-ready ticket 模板](specs/agent-ready-ticket-template.md) | 对齐 senior-project-manager 的九字段工单合同，以及 spec → Plane issue 流程。 |
-| [持久上下文布局](.workbuddy/memory/README.md) | 长期 `MEMORY.md` 与每日 `YYYY-MM-DD.md` 日志的写入规则。 |
-| [闭环操作定义](docs/closed-loop-workflow.md) | 各阶段的实际实现边界与证据闸（权威操作定义）。 |
+1. 在浏览器中保存本机的 Plane、仓库与三类 Agent CLI 配置。
+2. 读取配置 Project 中的未完成 Plane Ticket，并用结构化 ticket contract 判定是否可运行。
+3. 使用 `tasks/AIO-NNN-dev-prompt.md` 与 `tasks/AIO-NNN-acceptance-prompt.md`；缺任一 Prompt 时调用 Planner 生成仅属于该 Run 的版本。
+4. 创建一个 owned Worktree 与 feature branch，后台按 Developer → deterministic checks → 独立 QA 运行。
+5. QA FAIL 时只把原始 findings 交回 Developer；QA 总数最多五轮。QA PASS 后 Controller 才会提交 ticket-owned changed files。
+6. 在页面查看 append-only Timeline、Prompt 来源、findings、checks、changed files、worktree、Commit SHA 和 Hard Break。
+7. 对失败 Run 执行受约束的 Retry current stage 或 Stop owned Run；页面重开后仍可查看 retained artifacts。
+8. 记录 Repository Owner 的 visual accept、override、feature-branch push、Draft PR 或 merge 授权事件。当前仅记录授权，尚不从页面执行远端 GitHub 操作。
 
-## 闭环
+## 启动
 
-```
-Linear Ticket
-  → 手动启动 Controller
-  → 隔离 Git Run（worktree + branch）
-  → Claude 开发
-  → 确定性验证（commit / diff / 测试 exit 0）
-  → Controller 自建 PR
-  → Codex 独立 QA
-  → 最多两轮修复
-  → Linear: In Review / Blocked
-  → 人工 Review & Merge
-```
-
-## 设计原则（取自规格 `specs/Ticket Autopilot v0.1 Specification.md`）
-
-- 确定性动作不委托 LLM（建 worktree、跑测试、建 PR、更新 Linear、清理都由 Controller 完成）
-- 只依据证据推进状态，不把 Agent 自述当完成证据
-- 一次性 Run，不实现 Resume
-- 仅 R0/R1 自动执行；R2/R3 转人工（`BLOCKED_NEEDS_HUMAN`）
-
-## 复用优先（见 `AGENTS.md` / `IDEA.md`）
-
-先盘点 Linear/Plane 自动化、agent hooks、MCP、GitHub Actions、GitHub 原生集成能闭合哪些阶段，
-只对验证过的缺口写最薄的胶水/Controller。不预先造自定义平台。
-
-## 仓库结构（三层命名与职责）
-
-本仓库采用统一的**三层命名**，所有代码/文档以此为准（2026-07-28 决策锁定）：
-
-| 层级 | 名称 | 位置 | 职责 |
-|---|---|---|---|
-| 产品 | **Ticket Autopilot** | `src/ticket_autopilot/` | 整个产品包（含 CLI `ticket-controller`、规格、业务服务） |
-| 引擎 | **Engine** | `src/ticket_autopilot/engine/` | 声明式编排内核：`engine.py`(DAG+重试闭环解释器) / `drivers.py`(llm·cli·hermes·script 执行器+护栏) / `store.py`(快照) / `cli.py`(`python -m ticket_autopilot.engine`) / `handlers/`(仅 `close_ticket.py` 触碰 Plane) |
-| 连接器 | **Connector** | `src/ticket_autopilot/connectors/` | 把通用引擎适配到具体外部系统（Linear / Plane / GitHub / Codex）的胶水层 |
-
-```
-AI-Operations/
-├── README.md / pyproject.toml        # 项目级元信息（产品 = Ticket Autopilot）
-├── AGENTS.md / IDEA.md               # 项目北极星 / 复用优先原则
-├── src/ticket_autopilot/             # ★ 产品包 Ticket Autopilot
-│   ├── engine/                       #   Engine 编排内核（可 import ticket_autopilot.engine）
-│   │   └── handlers/close_ticket.py  #     唯一触碰 Plane 的节点（复用 reference）
-│   ├── connectors/                   #   Connector 层（外部系统适配）
-│   ├── cli.py schemas/ services/     #   产品 CLI / 规格 / 业务服务（骨架）
-│   ├── reference/ticket-pipeline/    #   前身 PoC（orchestrator/plane_client/dagu-poc）
-│   ├── workflows/                    #   YAML 工作流定义
-│   └── runs/ sandbox/                #   运行期产物（gitignored，保留 .gitkeep）
-├── tooling/
-│   ├── start-prompt/                 # parked：提示词真源 + 评测（core/modules/platform/eval）
-│   └── codex-notification-setup/     # parked：codex 基建配置
-├── specs/  research/  logs/  tasks/  tests/
-```
-
-### 命名决策原由（避免后续踩坑）
-- **Connector 而非 Handler**：`Handler` 指细粒度单步处理函数，且与引擎内部已有的 `engine/handlers/`（YAML `script` 节点的步骤处理器）撞名；Connector 语义精确（接口转换）、零冲突。代码已用此名（`adapters/` 已改名 `connectors/`）。
-- **Engine 合并进产品包**：历史上曾存在独立的 `ticket-autopilot/`（前身 Vivarium Forge Flow / `vff`）与顶层产品骨架 `src/ticket_autopilot/` 撞名。决策将独立引擎收编为 `engine/`，消除"两个 Ticket Autopilot"的歧义——整个产品 = Engine + Connector + 业务服务。
-- **遗留名已清除**：`vff` / `vivarium` / `forge_flow` / `forge-flow` / `Forge Flow` 已从代码与文档全部移除。
-- **两个容易混淆的 `ticket-autopilot`**：`src/ticket_autopilot/` 是**源码包**；规格书/任务票里的 `.ticket-autopilot/` 是**运行期点文件夹**（worktree/run 目录），属规格定义、刻意保留，二者不是同一物。
-
-## 最短 Plane-first 本地路径
-
-Python 3.11+ 的干净环境中安装（`.[dev]` 仅用于运行测试）：
+需要 Python 3.11+、Git，以及已经在 `PATH` 中可调用的 Planner、Developer、QA Agent CLI。
 
 ```bash
-python3.11 -m venv .venv  # 或任何 Python 3.11+ 解释器
+python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install --upgrade pip
 python -m pip install -e '.[dev]'
-ticket-controller --help
+python -m ticket_autopilot.web start
 ```
 
-配置只读入口与本地仓库；**所有 secret 只能来自环境变量**，不要写入配置文件或命令行：
+服务仅监听 `http://127.0.0.1:8765/`，启动后会打开浏览器。停止或查看状态：
 
 ```bash
-export TICKET_AUTOPILOT_REPOSITORY="$PWD" # 本地 Git 仓库
-export PLANE_API_KEY='...'                 # Plane read/status write
-export GITHUB_TOKEN='...'                  # Draft PR creation
-# 可选：三种 Agent CLI 名称；默认 codex / claude / qodercli
-# export TICKET_AUTOPILOT_PLANNER_CLI=codex
-# export TICKET_AUTOPILOT_DEVELOPER_CLI=claude
-# export TICKET_AUTOPILOT_QA_CLI=qodercli
+python -m ticket_autopilot.web status
+python -m ticket_autopilot.web stop
 ```
 
-确认三个 Agent CLI 已在 `PATH` 后，按同一 Plane key 运行四个命令：
+首次打开页面时填写：Plane workspace、project ID、API key、目标 Git repository 的绝对路径，以及 Planner / Developer / QA CLI 命令。配置保存在本机 `~/.ticket-autopilot/config.json`，目录权限为 owner-only；页面和日志会掩码 Secret。它是单人本机 Phase 1 设计，不提供 Keychain、多用户或远程访问。
+
+## 一张 Ticket 的实际流程
+
+```text
+Plane 未完成 Ticket
+  → contract / readiness gate
+  → 复用已有 Prompt，或 Planner 生成 Run-owned Prompt
+  → isolated worktree + feature branch
+  → Developer → checks → independent QA (最多 5 次)
+  → PASS 后本地 Commit，或 QA_EXHAUSTED / BLOCKED / HARD_BREAK
+  → Timeline、artifacts 和 Owner decision evidence
+```
+
+Run artifacts 和 disposable Worktree 均位于被开发仓库的 `.ticket-autopilot/` 下。系统一次只允许同一 repository 的一个 active Run；不会自动选择下一张 Ticket，也不会在服务重启后擅自恢复 Agent 执行。
+
+## 安全与边界
+
+- Developer 和 QA Agent 不得自行 Commit、Push、建 PR、Merge、部署或写回 Plane。
+- QA 使用独立的只读上下文；Agent 运行错误、超时、畸形输出和证据不匹配会成为 Hard Break，不伪装成 QA FAIL。
+- 归属问题区分 `DIFF_SPLIT_REQUIRED`、`BLOCKED_ATTRIBUTION` 与 `TECHNICAL_BLOCKED`；可机械拆分的 Diff 不应被误报为泛化的 requirements blocker。
+- 页面只记录 Owner authorization；真正 feature-branch push、Draft PR、merge 和 Plane 状态写回是后续交付能力，不是当前 Web UI 的副作用。
+
+## 当前已知可靠性问题
+
+服务启动的 `service_id` 可能以 `-` 开头，偶发被命令行误解析，导致本机健康检查超时。该问题已有失败测试覆盖，尚未修复；在它修复前，不能把“单命令稳定启动”视为完成。
+
+## 文档定位
+
+| 文档 | 用途 |
+| --- | --- |
+| [AGENTS.md](AGENTS.md) / [IDEA.md](IDEA.md) | 北极星、Goal check、复用优先与 Owner authority。 |
+| [docs/closed-loop-workflow.md](docs/closed-loop-workflow.md) | 当前 Phase 1 的权威操作边界与证据闸。 |
+| [specs/Ticket Autopilot PRD.md](specs/Ticket%20Autopilot%20PRD.md) | 历史产品设计与决策背景，不作为当前操作说明。 |
+| `tasks/AIO-NNN-*.md` | 每张 Ticket 的 Developer / Acceptance Prompt。 |
+
+`ticket-controller`、Engine YAML 和 reference pipeline 仍保留用于历史能力与后续复用；它们不是当前 Phase 1 Web 操作入口。
+
+## 验证
 
 ```bash
-ticket-controller run AIO-15
-ticket-controller status AIO-15
-ticket-controller cancel AIO-15 --run-id <run_id>   # 仅 active Run
-ticket-controller cleanup AIO-15 --run-id <run_id>  # 仅确认的本地 disposable 资源
+.venv/bin/python -m pytest \
+  tests/test_web_service.py \
+  tests/test_local_config.py \
+  tests/test_web_tickets.py \
+  tests/test_prompt_resolver.py \
+  tests/integration/test_web_agent_loop.py \
+  tests/test_web_run_tracking.py \
+  tests/integration/test_web_hard_break.py -q
 ```
 
-输出均为 JSON。只有 `IN_REVIEW` 和成功的 `CLEANED` 返回 0；`ACTIVE`、
-`BLOCKED_*`、`CANCELLED`、`STALLED` 均非 0。`cleanup` 保留 Run artifacts、
-controller log 和 QA/verifier 证据；它不会猜测 PID、分支或路径。没有 `resume`。
-
-运行本票隔离验证：
-
-```bash
-python -m pytest tests/test_cli.py tests/integration/test_cli_lifecycle.py -q
-```
-
-任务票以 Plane 中按 [agent-ready ticket 模板](specs/agent-ready-ticket-template.md) 创建的工单为执行合同。`tasks/ticket-autopilot-v0.1-tasklist.md` 是历史任务清单，不作为当前架构依据。
+测试采用 fake Agent 与临时仓库；它们证明本地控制流和边界，不等同于一次真实 Plane、真实 Agent CLI 或 GitHub 远端交付。

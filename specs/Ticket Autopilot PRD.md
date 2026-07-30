@@ -1,7 +1,7 @@
 # Ticket Autopilot — 产品需求文档（PRD）
 
 **版本：** v1.0（产品级 PRD）
-**状态：** Draft — 待 PM / 用户对齐
+**状态：** Historical design baseline — current Phase 1 implementation is documented in `README.md` and `docs/closed-loop-workflow.md`
 **日期：** 2026-07-29
 **Owner：** Haisu Zuo（产品 + 唯一人类干系人）
 **适用项目：** `AI-Operations` 仓库内的 `src/ticket_autopilot/` 包（未来开源为独立 repo）
@@ -25,7 +25,7 @@
 | 沙箱/护栏 | 文档描述，未强制 | **AIO-9 落地**：cwd 沙箱 + 只读强制 + 工具白名单，spawn 前拦截 |
 | 连接器 | Linear/GitHub/Claude/Codex 适配器 | **当前落地**：`connectors/plane.py`（取票/关单）、`connectors/github.py`（建草稿 PR；仅凭 repo-owner 显式授权 merge）、`connectors/qa.py`（只读 verdict 门禁） |
 
-本 PRD 以**当前实际产品**为准。`v0.1 Specification.md` 中的状态机、契约字段、CLI 命名等仍具参考价值，但凡与本 PRD 冲突，以本 PRD 为准。建议后续将旧规范归档或改写为「历史设计记录」。
+本 PRD 保留 2026-07-29 的产品决策背景；它不再是 Phase 1 的实施状态或操作说明。AIO-17 至 AIO-20 已实现 localhost Web 控制台、Plane intake、Prompt preparation、五轮 Developer/QA loop、local Commit 和 Timeline。实际边界、已知限制和验证命令以 `README.md` 与 `docs/closed-loop-workflow.md` 为准；本文件中任何与它们冲突的“当前实际”表述均应按历史设计阅读。
 
 ---
 
@@ -85,9 +85,9 @@
 
 | # | 非目标 | 为什么 out-of-scope |
 | --- | --- | --- |
-| NG1 | 自建 Web UI / 控制台（v0.1） | 非技术用户的真阻塞是凭证/本地 Python/git/读 YAML，而非「命令行」本身；AGENTS.md 红线 = 复用优先、不预造平台。真要做也从**只读状态看板**起步。 |
+| NG1 | 通用多用户 Web 平台 / 远程控制台 | Phase 1 已实现 localhost-only 单人 Web 控制台；远程访问、鉴权、多用户与通知仍不在范围。 |
 | NG2 | Agent 自主 Merge / 自动生产部署 / 自动迁移 | 安全边界约束自动化主体；Repo Owner 的显式 merge 授权不是自动 Merge。 |
-| NG3 | 多工单队列 / 并行 Run / 持久服务 | 当前是个人单工单闭环；复杂度与收益不匹配。 |
+| NG3 | 多工单队列 / 并行 Run / 远程持久服务 | 当前是个人单工单、localhost-only Run；复杂度与收益不匹配。 |
 | NG4 | Run Resume（断点续跑） | 采用「一次性可丢弃 Run」模型：崩溃即 Abort→Cleanup→新建 Run 重头跑，接受额外 Token 成本换实现简单。 |
 | NG5 | 工单自动选型 / 自动写需求 | 工单由人类在 Plane 中创建与指派，Autopilot 不生产需求。 |
 | NG6 | 新建平台/框架/引擎功能 | 复用优先：先用 Plane/GitHub Actions/Agent CLI/MCP 的现成能力，只在被证实的缺口上写最小胶水。 |
