@@ -5,61 +5,35 @@ const ticketsStatus = document.querySelector('#tickets-status');
 const detail = document.querySelector('#detail');
 const detailBody = document.querySelector('#detail-body');
 const prepareResult = document.querySelector('#prepare-result');
+const timeline = document.querySelector('#timeline');
+const eventsNode = document.querySelector('#timeline-events');
+const runStatus = document.querySelector('#run-status');
+const runSummary = document.querySelector('#run-summary');
+const hardBreak = document.querySelector('#hard-break');
 let selected = null;
+let activeRunId = localStorage.getItem('ticket-autopilot.run_id');
+let activeWorktree = null;
+let pollTimer = null;
 
-function populate(config) {
-  form.workspace.value = config.plane.workspace;
-  form.project.value = config.plane.project;
-  form.api_key.placeholder = config.plane.api_key || 'Not configured';
-  form.repository.value = config.repository;
-  form.planner.value = config.agents.planner;
-  form.developer.value = config.agents.developer;
-  form.qa.value = config.agents.qa;
-}
 function text(value) { const node = document.createElement('span'); node.textContent = value ?? '—'; return node; }
-function promptSource(availability) {
-  return Object.entries(availability).map(([role, value]) => `${role}: ${value.available ? 'existing file' : 'missing'}`).join(' · ');
-}
+function populate(config) { form.workspace.value = config.plane.workspace; form.project.value = config.plane.project; form.api_key.placeholder = config.plane.api_key || 'Not configured'; form.repository.value = config.repository; form.planner.value = config.agents.planner; form.developer.value = config.agents.developer; form.qa.value = config.agents.qa; }
+function promptSource(availability) { return Object.entries(availability).map(([role, value]) => `${role}: ${value.available ? 'existing file' : 'missing'}`).join(' · '); }
 async function json(url, options) { const response = await fetch(url, options); const body = await response.json(); if (!response.ok) throw new Error(body.error || 'Request failed.'); return body; }
+function addLine(parent, label, value) { const line = document.createElement('p'); const strong = document.createElement('strong'); strong.textContent = `${label}: `; line.append(strong, text(value)); parent.append(line); }
+
 async function loadSettings() { populate(await json('/api/config')); }
-async function loadTickets() {
-  ticketsStatus.textContent = 'Loading…'; tickets.replaceChildren(); detail.hidden = true; selected = null;
-  try {
-    const payload = await json('/api/tickets'); ticketsStatus.textContent = `${payload.tickets.length} unfinished ticket(s).`;
-    for (const ticket of payload.tickets) {
-      const button = document.createElement('button'); button.type = 'button'; button.className = 'ticket';
-      button.append(text(ticket.identifier), text(ticket.title), text(ticket.state.name || ticket.state.group), text(ticket.risk || 'contract blocked'), text(promptSource(ticket.prompt_availability)));
-      button.addEventListener('click', () => loadDetail(ticket.id)); tickets.append(button);
-    }
-  } catch (error) { ticketsStatus.textContent = error.message; }
-}
-async function loadDetail(id) {
-  try {
-    selected = await json(`/api/tickets/${encodeURIComponent(id)}`); detail.hidden = false; prepareResult.textContent = '';
-    detailBody.replaceChildren();
-    for (const [label, value] of [['Identifier', selected.identifier], ['State', selected.state.name || selected.state.group], ['Priority', selected.priority], ['Risk', selected.risk], ['Eligibility', selected.eligible ? 'Ready to prepare' : selected.reason], ['Prompt availability', promptSource(selected.prompt_availability)]]) {
-      const row = document.createElement('p'); row.append(document.createElement('strong'), text(` ${value ?? '—'}`)); row.firstChild.textContent = `${label}:`; detailBody.append(row);
-    }
-    document.querySelector('#prepare').disabled = !selected.eligible;
-    document.querySelector('#run').disabled = !selected.eligible;
-  } catch (error) { ticketsStatus.textContent = error.message; }
-}
+async function loadTickets() { ticketsStatus.textContent = 'Loading…'; tickets.replaceChildren(); detail.hidden = true; selected = null; try { const payload = await json('/api/tickets'); ticketsStatus.textContent = `${payload.tickets.length} unfinished ticket(s).`; for (const ticket of payload.tickets) { const button = document.createElement('button'); button.type = 'button'; button.className = 'ticket'; button.append(text(ticket.identifier), text(ticket.title), text(ticket.state.name || ticket.state.group), text(ticket.risk || 'contract blocked'), text(promptSource(ticket.prompt_availability))); button.addEventListener('click', () => loadDetail(ticket.id)); tickets.append(button); } } catch (error) { ticketsStatus.textContent = error.message; } }
+async function loadDetail(id) { try { selected = await json(`/api/tickets/${encodeURIComponent(id)}`); detail.hidden = false; prepareResult.textContent = ''; detailBody.replaceChildren(); for (const [label, value] of [['Identifier', selected.identifier], ['State', selected.state.name || selected.state.group], ['Priority', selected.priority], ['Risk', selected.risk], ['Eligibility', selected.eligible ? 'Ready to prepare' : selected.reason], ['Prompt availability', promptSource(selected.prompt_availability)]]) addLine(detailBody, label, value); document.querySelector('#prepare').disabled = !selected.eligible; document.querySelector('#run').disabled = !selected.eligible; } catch (error) { ticketsStatus.textContent = error.message; } }
+function renderEvent(event) { const item = document.createElement('article'); item.className = `timeline-event status-${String(event.status).toLowerCase()}`; const heading = document.createElement('h3'); heading.textContent = `${event.sequence}. ${event.stage} · ${event.role} · round ${event.round} · ${event.status}`; item.append(heading); const meta = document.createElement('p'); meta.className = 'event-meta'; meta.textContent = `${event.timestamp} · ${event.actor_type} · ${event.event_type}`; item.append(meta); const details = document.createElement('pre'); details.textContent = JSON.stringify(event.details, null, 2); item.append(details); if (event.artifact_refs.length) { const refs = document.createElement('p'); refs.textContent = `Artifacts: ${event.artifact_refs.join(', ')}`; item.append(refs); } return item; }
+function renderHardBreak(snapshot) { hardBreak.replaceChildren(); const value = snapshot.hard_break; hardBreak.hidden = !value; if (!value) return; hardBreak.className = 'hard-break'; const title = document.createElement('h3'); title.textContent = 'Hard Break — human intervention required'; hardBreak.append(title); for (const [label, field] of [['Role', 'role'], ['Stage', 'stage'], ['Round', 'round'], ['Reason', 'reason'], ['Worktree', 'worktree'], ['Allowed actions', 'allowed_human_actions']]) addLine(hardBreak, label, Array.isArray(value[field]) ? value[field].join(', ') : value[field]); }
+async function loadTimeline() { if (!activeRunId) return; try { const payload = await json(`/api/runs/${encodeURIComponent(activeRunId)}`); const snapshot = payload.snapshot; timeline.hidden = false; runStatus.textContent = snapshot.status === 'PASS' ? 'COMPLETED' : snapshot.status; activeWorktree = snapshot.worktree || snapshot.hard_break?.worktree || null; runSummary.textContent = `Run ${payload.run_id} · ${activeWorktree ? `worktree: ${activeWorktree}` : 'worktree evidence is retained on disk.'}`; eventsNode.replaceChildren(...payload.events.map(renderEvent)); renderHardBreak(snapshot); const active = ['ACTIVE', 'DEVELOPING', 'VERIFYING', 'QA_RUNNING'].includes(snapshot.status); document.querySelector('#retry').disabled = active || snapshot.status === 'STOPPED'; document.querySelector('#stop').disabled = !active; if (active && !pollTimer) pollTimer = setInterval(loadTimeline, 1200); if (!active && pollTimer) { clearInterval(pollTimer); pollTimer = null; } } catch (error) { runStatus.textContent = error.message; if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } } }
+function beginTimeline(runId) { activeRunId = runId; localStorage.setItem('ticket-autopilot.run_id', runId); loadTimeline(); }
 document.querySelector('#refresh').addEventListener('click', loadTickets);
-document.querySelector('#prepare').addEventListener('click', async () => {
-  if (!selected) return; prepareResult.textContent = 'Preparing…';
-  try { const result = await json(`/api/tickets/${encodeURIComponent(selected.id)}/prepare`, {method: 'POST'}); prepareResult.textContent = result.status === 'READY' ? `Ready: dev=${result.prompts.dev.source}, acceptance=${result.prompts.acceptance.source}` : `${result.status}: ${result.hard_break_reason || result.reason}`; }
-  catch (error) { prepareResult.textContent = error.message; }
-});
-document.querySelector('#run').addEventListener('click', async () => {
-  if (!selected) return; prepareResult.textContent = 'Starting isolated Run…';
-  try { const result = await json(`/api/tickets/${encodeURIComponent(selected.id)}/run`, {method: 'POST'}); prepareResult.textContent = result.run_id ? `Run started: ${result.run_id}` : `${result.status}: ${result.reason}`; }
-  catch (error) { prepareResult.textContent = error.message; }
-});
-form.addEventListener('submit', async (event) => {
-  event.preventDefault(); settingsResult.textContent = ''; const apiKey = form.api_key.value;
-  const config = {plane: {workspace: form.workspace.value, project: form.project.value}, repository: form.repository.value, agents: {planner: form.planner.value, developer: form.developer.value, qa: form.qa.value}};
-  if (apiKey) config.plane.api_key = apiKey;
-  try { populate(await json('/api/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(config)})); form.api_key.value = ''; settingsResult.textContent = 'Saved locally.'; }
-  catch (error) { settingsResult.textContent = error.message; }
-});
-Promise.all([loadSettings(), loadTickets()]).catch((error) => { ticketsStatus.textContent = error.message; });
+document.querySelector('#prepare').addEventListener('click', async () => { if (!selected) return; prepareResult.textContent = 'Preparing…'; try { const result = await json(`/api/tickets/${encodeURIComponent(selected.id)}/prepare`, {method: 'POST'}); prepareResult.textContent = result.status === 'READY' ? `Ready: dev=${result.prompts.dev.source}, acceptance=${result.prompts.acceptance.source}` : `${result.status}: ${result.hard_break_reason || result.reason}`; } catch (error) { prepareResult.textContent = error.message; } });
+document.querySelector('#run').addEventListener('click', async () => { if (!selected) return; prepareResult.textContent = 'Starting isolated Run…'; try { const result = await json(`/api/tickets/${encodeURIComponent(selected.id)}/run`, {method: 'POST'}); prepareResult.textContent = result.run_id ? `Run started: ${result.run_id}` : `${result.status}: ${result.reason}`; if (result.run_id) beginTimeline(result.run_id); } catch (error) { prepareResult.textContent = error.message; } });
+document.querySelector('#retry').addEventListener('click', async () => { if (activeRunId) { await json(`/api/runs/${encodeURIComponent(activeRunId)}/retry`, {method: 'POST'}); loadTimeline(); } });
+document.querySelector('#stop').addEventListener('click', async () => { if (activeRunId) { await json(`/api/runs/${encodeURIComponent(activeRunId)}/stop`, {method: 'POST'}); loadTimeline(); } });
+document.querySelector('#finder').addEventListener('click', () => { if (activeWorktree) navigator.clipboard?.writeText(activeWorktree); });
+document.querySelector('#owner-action').addEventListener('submit', async (event) => { event.preventDefault(); if (!activeRunId) return; const data = new FormData(event.target); const payload = {action: data.get('action'), actor: data.get('actor'), reason: data.get('reason'), actor_type: 'repository_owner', approved: true, approved_at: new Date().toISOString()}; const result = await json(`/api/runs/${encodeURIComponent(activeRunId)}/owner-actions`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)}); document.querySelector('#owner-action-result').textContent = `${result.status}; original gate: ${result.original_status}`; loadTimeline(); });
+form.addEventListener('submit', async (event) => { event.preventDefault(); settingsResult.textContent = ''; const apiKey = form.api_key.value; const config = {plane: {workspace: form.workspace.value, project: form.project.value}, repository: form.repository.value, agents: {planner: form.planner.value, developer: form.developer.value, qa: form.qa.value}}; if (apiKey) config.plane.api_key = apiKey; try { populate(await json('/api/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(config)})); form.api_key.value = ''; settingsResult.textContent = 'Saved locally.'; } catch (error) { settingsResult.textContent = error.message; } });
+Promise.all([loadSettings(), loadTickets(), loadTimeline()]).catch((error) => { ticketsStatus.textContent = error.message; });

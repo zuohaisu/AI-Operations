@@ -27,6 +27,7 @@ from urllib.parse import urlparse
 from ticket_autopilot.connectors import plane
 from ticket_autopilot.services.prompt_resolver import PromptPreparationError, PromptResolver
 from ticket_autopilot.services.ticket_contract import preflight_plane_issue, readiness_errors
+from ticket_autopilot.services.run_events import redact
 from ticket_autopilot.services.run_manager import RunManager
 from ticket_autopilot.services.web_agent_loop import WebAgentLoop, WebAgentLoopError
 from urllib.request import Request, urlopen
@@ -421,6 +422,7 @@ class TicketBoard:
         self.repository = Path(repository or Path.cwd()).resolve()
         self.planner = planner
         self.web_loop_factory = web_loop_factory or self._default_web_loop
+        self._web_loops: dict[str, WebAgentLoop] = {}
 
     def list(self) -> dict[str, Any]:
         items = plane.list_work_items(**self._plane_options())
@@ -460,9 +462,11 @@ class TicketBoard:
             return {"status": "BLOCKED_REQUIREMENTS", "reason": "Run requires prepared Developer and QA Prompts",
                     "run_id": None, "developer_calls": 0, "qa_calls": 0}
         try:
-            return self.web_loop_factory(settings=self.settings, repository=self.repository).start(
-                detail["ticket_spec"], developer_prompt=developer_prompt, qa_prompt=qa_prompt,
-            )
+            loop = self.web_loop_factory(settings=self.settings, repository=self.repository)
+            result = loop.start(detail["ticket_spec"], developer_prompt=developer_prompt, qa_prompt=qa_prompt)
+            if result.get("run_id"):
+                self._web_loops[str(result["run_id"])] = loop
+            return result
         except WebAgentLoopError as exc:
             return {"status": "BLOCKED_REQUIREMENTS", "reason": str(exc), "run_id": None,
                     "developer_calls": 0, "qa_calls": 0}
@@ -525,7 +529,32 @@ class TicketBoard:
                              run_id=run["run_id"], qa_attempt=kwargs["qa_attempt"],
                              ticket_context=kwargs["prompt"])
 
-        return WebAgentLoop(RunManager(repository), developer=developer, checker=checker, qa=independent_qa)
+        secret_values = (settings.load(redacted=False)["plane"].get("api_key", ""),)
+        return WebAgentLoop(
+            RunManager(repository, known_secrets=secret_values), developer=developer, checker=checker,
+            qa=independent_qa, known_secrets=secret_values,
+        )
+
+    def timeline(self, run_id: str) -> dict[str, Any]:
+        return self._loop_for(run_id).timeline(run_id)
+
+    def retry(self, run_id: str) -> dict[str, Any]:
+        return self._loop_for(run_id).retry_current_stage(run_id)
+
+    def stop_run(self, run_id: str) -> dict[str, Any]:
+        return self._loop_for(run_id).stop(run_id)
+
+    def owner_action(self, run_id: str, authorization: dict[str, Any]) -> dict[str, Any]:
+        return self._loop_for(run_id).record_owner_action(run_id, authorization)
+
+    def _loop_for(self, run_id: str) -> WebAgentLoop:
+        if run_id in self._web_loops:
+            return self._web_loops[run_id]
+        # A reopened browser reads artifacts without reviving or guessing a process.
+        secret_values = (self.settings.load(redacted=False)["plane"].get("api_key", ""),)
+        unavailable = lambda **_kwargs: (_ for _ in ()).throw(WebAgentLoopError("execution context is unavailable"))
+        return WebAgentLoop(RunManager(self.repository, known_secrets=secret_values), developer=unavailable,
+                            checker=unavailable, qa=unavailable, known_secrets=secret_values)
 
     def _summary(self, item: dict[str, Any]) -> dict[str, Any]:
         detail = self._detail(item)
@@ -607,6 +636,9 @@ class SettingsHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, self.settings.load(redacted=True))
             elif path == "/api/tickets":
                 self._json(HTTPStatus.OK, self.tickets.list())
+            elif path.startswith("/api/runs/"):
+                run_id = path.removeprefix("/api/runs/").rstrip("/")
+                self._json(HTTPStatus.OK, self.tickets.timeline(run_id))
             elif path.startswith("/api/tickets/"):
                 issue_id = path.removeprefix("/api/tickets/")
                 self._json(HTTPStatus.OK, self.tickets.detail(issue_id))
@@ -623,6 +655,21 @@ class SettingsHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if path.startswith("/api/runs/"):
+            remainder = path.removeprefix("/api/runs/").strip("/")
+            run_id, separator, action = remainder.partition("/")
+            try:
+                if separator and action == "retry":
+                    self._json(HTTPStatus.OK, self.tickets.retry(run_id))
+                elif separator and action == "stop":
+                    self._json(HTTPStatus.OK, self.tickets.stop_run(run_id))
+                elif separator and action == "owner-actions":
+                    self._json(HTTPStatus.OK, self.tickets.owner_action(run_id, self._request_json()))
+                else:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            except (ValueError, WebAgentLoopError) as exc:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            return
         if path.startswith("/api/tickets/") and path.endswith("/run"):
             issue_id = path.removeprefix("/api/tickets/").removesuffix("/run").rstrip("/")
             try:
@@ -644,14 +691,21 @@ class SettingsHandler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             if length < 1 or length > 64 * 1024:
                 raise LocalServiceError("settings request is invalid")
-            value = json.loads(self.rfile.read(length).decode("utf-8"))
-            if not isinstance(value, dict):
-                raise LocalServiceError("settings request is invalid")
+            value = self._request_json()
             self._json(HTTPStatus.OK, self.settings.save(value))
         except (ValueError, UnicodeDecodeError, LocalServiceError):
             self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid settings"})
         except OSError:
             self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "could not save settings"})
+
+    def _request_json(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length < 1 or length > 64 * 1024:
+            raise LocalServiceError("request is invalid")
+        value = json.loads(self.rfile.read(length).decode("utf-8"))
+        if not isinstance(value, dict):
+            raise LocalServiceError("request is invalid")
+        return value
 
     def _static(self, name: str, content_type: str) -> None:
         path = Path(__file__).with_name("static") / name
@@ -667,7 +721,7 @@ class SettingsHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _json(self, status: HTTPStatus, value: dict[str, Any]) -> None:
-        body = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        body = json.dumps(redact(value), ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))

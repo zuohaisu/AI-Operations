@@ -21,7 +21,7 @@ MERGE_AUTHORIZED_BY_USER = "MERGE_AUTHORIZED_BY_USER"
 DIFF_SPLIT_REQUIRED = "DIFF_SPLIT_REQUIRED"
 TECHNICAL_BLOCKED = "TECHNICAL_BLOCKED"
 
-_OWNER_ACTIONS = frozenset({"push_feature_branch", "override_gate", "merge"})
+_OWNER_ACTIONS = frozenset({"visual_accept", "push_feature_branch", "create_draft_pr", "override_gate", "merge"})
 
 
 class DeliveryAuthorizationError(ValueError):

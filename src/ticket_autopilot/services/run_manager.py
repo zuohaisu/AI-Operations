@@ -24,6 +24,7 @@ from ticket_autopilot.services.git_worktree import (
     GitWorktreeService,
     is_protected_branch,
 )
+from ticket_autopilot.services.run_events import RunEventStore, redact
 from ticket_autopilot.services.ticket_contract import validate_ticket_spec
 
 
@@ -76,8 +77,10 @@ class RunManager:
         run_root: str | Path | None = None,
         worktree_root: str | Path | None = None,
         git: GitWorktreeService | None = None,
+        known_secrets: tuple[str, ...] = (),
     ):
         self.git = git or GitWorktreeService(repository)
+        self.known_secrets = tuple(value for value in known_secrets if value)
         self.repository = self.git.repository
         runtime_root = self.repository / ".ticket-autopilot"
         self.run_root = self._absolute_under_repository(run_root or runtime_root / "runs")
@@ -128,6 +131,11 @@ class RunManager:
             (artifact_dir / "controller.log").touch(exist_ok=False)
             self.git.create_worktree(worktree, branch, base_sha)
             self._write_state(record)
+            self.append_event(
+                record, stage="run", role="controller", status="CREATED", event_type="run_created",
+                artifact_refs=("state.json", "ticket-spec.json"),
+                details={"worktree": record.worktree, "branch": record.branch, "base_sha": record.base_sha},
+            )
         except Exception:
             # Do not guess how to clean a partially-created Git worktree.  Keep the
             # owned artifact directory for forensic inspection and surface the failure.
@@ -159,6 +167,10 @@ class RunManager:
         record = self.load_run(run if isinstance(run, str) else run.run_id)
         updated = RunRecord(**{**asdict(record), "state": state, "updated_at": _timestamp()})
         self._write_state(updated)
+        self.append_event(
+            updated, stage="run", role="controller", status=state, event_type="run_state_changed",
+            artifact_refs=("state.json",), details={"previous_state": record.state},
+        )
         return updated
 
     def developer_policy(self, run: RunRecord | str) -> GuardrailPolicy:
@@ -254,12 +266,34 @@ class RunManager:
         if record.branch != expected_branch:
             raise RunManagerError("branch is not the run's generated disposable branch")
 
+    def append_event(
+        self,
+        run: RunRecord | str,
+        *,
+        stage: str,
+        role: str,
+        status: str,
+        event_type: str,
+        round: int = 0,
+        artifact_refs: tuple[str, ...] = (),
+        details: dict[str, Any] | None = None,
+        actor_type: str = "system",
+    ) -> dict[str, Any]:
+        record = self.load_run(run if isinstance(run, str) else run.run_id)
+        return RunEventStore(record.artifact_dir, known_secrets=self.known_secrets).append(
+            run_id=record.run_id, stage=stage, role=role, status=status, event_type=event_type,
+            round=round, artifact_refs=artifact_refs, details=details, actor_type=actor_type,
+        )
+
+    def events(self, run: RunRecord | str) -> list[dict[str, Any]]:
+        record = self.load_run(run if isinstance(run, str) else run.run_id)
+        return RunEventStore(record.artifact_dir, known_secrets=self.known_secrets).read()
+
     def _write_state(self, record: RunRecord) -> None:
         self._write_json(record.state_path, asdict(record))
 
-    @staticmethod
-    def _write_json(path: Path, value: Any) -> None:
-        path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    def _write_json(self, path: Path, value: Any) -> None:
+        path.write_text(json.dumps(redact(value, self.known_secrets), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     def _absolute_under_repository(self, path: str | Path) -> Path:
         target = Path(path).expanduser().resolve()

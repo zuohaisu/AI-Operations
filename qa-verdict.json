@@ -1,82 +1,59 @@
 {
   "schema_version": "1.0",
-  "issue_key": "AIO-17",
-  "plane_issue_id": "bf7bd230-cfd3-4366-b7fd-0b803221b646",
-  "run_id": "aio-17-qa-20260730-1",
+  "issue_key": "AIO-20",
+  "plane_issue_id": "fca986c3-6482-43e6-8a45-6767cb4c3bf6",
+  "run_id": "aio-20-qa-20260730-1",
   "qa_attempt": 1,
   "verdict": "PASS",
   "review_target": {
-    "base": "7af9930 (origin/main, 'clear the work area')",
-    "head": "68c8e42 'update 2 sets of prompts'（main ahead 1，未推送；AIO-17 交付物均为工作区未提交文件）",
-    "diff_scope": "AIO-17 相关改动 8 个文件：start-ticket-autopilot（新增根启动脚本）、src/ticket_autopilot/web.py（新增 517 行 Web/service/config 模块）、src/ticket_autopilot/static/{index.html,app.js,styles.css}（无构建静态页）、tests/test_web_service.py、tests/test_local_config.py（新增测试）、pyproject.toml（package-data 增加 static/*，1 行）。工作区同时存在与本票无关的 PM/field-feedback 文档改动（IDEA.md、docs/closed-loop-workflow.md、specs/*、docs/field-feedback/、tasks/AIO-015~020 prompts），未计入本票 diff。"
+    "base": "cfd34ac (HEAD -> main, origin/main, 'update docs')",
+    "head": "工作区未提交改动（无独立 feature branch）",
+    "diff_scope": "AIO-20 改动 11 个文件：新增 src/ticket_autopilot/services/run_events.py、docs/run-event-schema.md、tests/test_web_run_tracking.py、tests/integration/test_web_hard_break.py；修改 services/{delivery_policy,run_manager,web_agent_loop}.py、web.py、static/{app.js,index.html,styles.css}。delivery_policy.py 仅 1 行（owner actions 集合扩展）。无 pre-existing dirty paths，全部改动归属本票。"
+  },
+  "attribution_status": "CLEAN",
+  "readiness_gate": {
+    "command": ".venv/bin/python -m pytest tests/integration/test_web_agent_loop.py -q",
+    "exit_code": 0,
+    "result": "4 passed",
+    "checked_at": "2026-07-30T17:57:06Z"
   },
   "commands": [
-    {"command": ".venv/bin/python -m pytest tests/test_web_service.py tests/test_local_config.py -q", "exit_code": 0, "result": "5 passed in 0.29s"},
-    {"command": ".venv/bin/python -m pytest -q", "exit_code": 0, "result": "146 passed, 2 subtests passed in 3.96s"},
-    {"note": "系统 python3 为 3.9.6 且无 pytest；按项目约定使用仓库 .venv（Python 3.12.13, pytest 9.1.1）执行必跑命令。"}
+    {"command": ".venv/bin/python -m pytest tests/test_web_run_tracking.py tests/integration/test_web_hard_break.py -q", "exit_code": 0, "result": "6 passed in 3.53s", "note": "系统 python3 无 pytest，按项目环境约定使用 .venv 解释器执行同一命令语义"},
+    {"command": ".venv/bin/python -m pytest -q", "exit_code": 0, "result": "184 passed, 4 subtests passed in 27.05s"}
   ],
   "acceptance_criteria": [
-    {
-      "id": "AC-1",
-      "status": "PASS",
-      "evidence": [
-        "在 .qa-tmp/aio17/repo 隔离副本（确认无预置 .venv）+ 临时 HOME + BROWSER 指向 fake 脚本执行 ./start-ticket-autopilot：bootstrap 自建 .venv(Python 3.12.13)，命令返回 0",
-        "命令返回后 curl http://127.0.0.1:8765/api/health 返回 {status:ok, service_id 匹配 service.json}；lsof 显示仅绑定 127.0.0.1:8765",
-        "fake browser 日志恰好 1 条 URL 调用"
-      ]
-    },
-    {
-      "id": "AC-2",
-      "status": "PASS",
-      "evidence": [
-        "对健康实例二次 start：exit 0，service.json pid 不变（50228），lsof 监听进程数=1，pgrep 'ticket_autopilot.web server' 计数=1，browser 日志新增第 2 条（仅重开页面）"
-      ]
-    },
-    {
-      "id": "AC-3",
-      "status": "PASS",
-      "evidence": [
-        "POST /api/config 保存 Plane/repository/Agent 设置，返回体 api_key 为 ********；restart 后 GET /api/config 非敏感字段逐项一致、api_key 仍为掩码",
-        "权限：~/.ticket-autopilot 与 logs/ 为 drwx------(0700)，config.json/service.json/server.log 为 -rw-------(0600)",
-        "回传掩码不覆盖真实密钥：POST api_key='********' 后 config.json 中真实值保留；server.log、service.json、页面 HTML 中均无明文密钥"
-      ]
-    },
-    {
-      "id": "AC-4",
-      "status": "PASS",
-      "evidence": [
-        "构造 pid=987654 的 stale service.json 后 start：安全恢复，exit 0，新服务健康",
-        "QA 自有探针进程占用 8765 后 start：exit 1，stderr 明确报 'in use by another process'；探针进程 kill -0 确认存活，仅由 QA 自行清理",
-        "代码层：唯一致命信号 os.killpg(web.py:369) 前置 _matches_process 校验（PID+进程组组长+一次性 service_id 出现在 ps command 中）"
-      ]
-    },
-    {
-      "id": "AC-5",
-      "status": "PASS",
-      "evidence": [
-        "stopped 态：status=1 / stop=0 / restart=0；running 态：status=0 / restart=0（pid 56583→56662）/ stop=0",
-        "stop 后 server.log 保留且可读（0 字节属预期：handler 刻意抑制请求日志防密钥泄露，stdout/stderr 无异常输出）；stop 后 pgrep 无残留服务进程"
-      ]
-    }
+    {"id": "AC-1", "status": "PASS", "evidence": ["RunEventStore.append 仅追加、sequence=行号强校验（run_events.py L92-L132）；七个 canonical states 全部由持久事件产生（web_agent_loop.py L91/L162-L165/L248/L307-L311），API 原样透传（web.py L639-L641）；app.js renderEvent 逐字段 textContent 渲染，无前端状态推断；沙箱 API 实测七状态齐现于 events.jsonl；timestamp/stage/role/round/findings/changed_files/SHA 全部在事件中且与 artifacts 一致（commit.sha == snapshot.commit.sha 测试断言）"]},
+    {"id": "AC-2", "status": "PASS", "evidence": ["Run 由服务器进程内 daemon 线程持有（web_agent_loop.py L92-L94），服务器以 start_new_session 独立会话启动（web.py L224-L234），页面关闭仅断 HTTP；重开页面走 _loop_for 只读 loop（web.py L550-L557），developer/checker/qa 回调全部为抛异常占位，仅从 events.jsonl + state 快照恢复；沙箱实测 reload 后 Timeline 完整恢复"]},
+    {"id": "AC-3", "status": "PASS", "evidence": ["Hard Break 为独立 event_type=hard_break/status=HARD_BREAK（web_agent_loop.py L301-L305），developer/checker/QA 异常各自走 hard_break 路径，不映射 QA FAIL/PASS；owner 五类 action 审计含 actor/action/approved_at/reason（delivery_policy.py L70-L77），原始 gate 状态保留（original_status 断言 + append-only）；require_user_authorization 是 record_owner_action 第一条实质语句且该端点零远程副作用；沙箱实测伪造 actor_type=developer_agent 的 merge → HTTP 400 且未写入任何事件（event_count 保持 24）"]},
+    {"id": "AC-4", "status": "PASS", "evidence": ["retry_current_stage 沿用同一 run_id（test_web_hard_break.py L26 断言）；历史只增不减（after[:len(before)]==before 前缀断言）；retry 后 checks_completed 与 qa_verdict_recorded 各重新出现一次，commit 门禁重跑；沙箱实测非法状态 retry 被服务端拒绝（not eligible for retry）"]},
+    {"id": "AC-5", "status": "PASS", "evidence": ["stop 仅使用 register_owned_process_group 登记且经 owns_process_group（kill 0 + getpgid 比对）双重验证的 identity，UI 无 PID 注入入口；测试断言仅对登记 group 402 发信号且 artifact 目录保留；Finder 按钮仅剪贴板写入 worktree 路径，不执行命令；沙箱实测已完成 Run 的 stop 被服务端拒绝（Run is not active）"]},
+    {"id": "AC-6", "status": "PASS", "evidence": ["redact 递归覆盖 credential 字段名/known_secrets 明文/token 模式（run_events.py L27-L46），事件、state、artifact 写盘前均 redact，_json 对所有 API 响应再 redact，log_message 禁用；沙箱注入 fake secret 后：6 个 Run 的 API 响应、/api/config、磁盘全部 raw artifacts、四种状态页面 DOM 均无完整值，Hard Break reason 呈掩码 ********；app.js 全文件仅 textContent/createElement，无 innerHTML"]}
   ],
-  "static_checks": [
-    "bind 严格 127.0.0.1：HOST 常量硬编码(web.py:28)，ThreadingHTTPServer((HOST, port))(web.py:480)，全部交付文件无 0.0.0.0",
-    "API key 不进入命令行/HTML/异常/日志：server 子命令仅携带 --port/--service-id/--home；log_message 全量抑制(web.py:473-475)；错误响应为固定文案",
-    "stop/restart 发信号前经 _is_owned_running/_matches_process 校验 owned record，从不裸 kill 记录 PID",
-    "bootstrap 不要求全局安装或手工激活 .venv：脚本自建 venv + pip install --editable 后 exec",
-    "静态页零 Node/React 依赖：纯 HTML/CSS/vanilla JS，无 package.json、无模块系统"
+  "visual_evidence": {
+    "status": "PASS",
+    "viewport": "962x876",
+    "url": "http://127.0.0.1:8790/ (沙箱 .qa-tmp/qa_aio20_visual_sandbox.py，真实生产代码路径生成的 6 个 Run)",
+    "sources": [
+      ".qa-tmp/aio20-visual-evidence.json（四状态 DOM/a11y 等价可复核证据 + 程序化布局测量）",
+      "running: ACTIVE，Retry 禁用/Stop 可用；qa_exhausted: 41 事件、round 1-5 清晰区分、5 个 QA_PENDING 门禁事件、长 finding 无横向溢出且按钮不被遮挡；hard_break: 独立面板含 Role/Stage/Round/Reason/Worktree/Allowed actions，Secret 掩码；completed: 24 事件、5 条 repository_owner 审计事件字段齐全、commit 事件可见"
+    ],
+    "note": "浏览器截图工具（CDP take_screenshot）环境级超时，连续 10 次失败，无像素截图；已按验收提示词采用等价可复核证据（DOM 快照 + 程序化布局断言）。视觉沙箱服务器保持运行于 127.0.0.1:8790 供人工目检，切换 Run 用 localStorage key ticket-autopilot.run_id（见 .qa-tmp/aio20-visual/runs.json）。"
+  },
+  "delivery_states_observed": [
+    "QA_PENDING", "HUMAN_VISUAL_REVIEW_PENDING", "READY_FOR_REVIEW",
+    "DIFF_SPLIT_REQUIRED", "USER_OVERRIDE_APPROVED", "MERGE_AUTHORIZED_BY_USER", "TECHNICAL_BLOCKED"
   ],
+  "owner_actions": [],
+  "owner_actions_note": "本次验收期间无真实 repo owner 交付动作（无 push/Draft PR/merge）；owner 审计链路由沙箱内 5 类 action 事件验证（actor=sandbox-repo-owner，字段齐全，原始 gate 保留）。",
+  "secret_leaks": [],
   "findings": [
-    {
-      "id": "QA-001",
-      "severity": "minor",
-      "type": "SCOPE_VIOLATION",
-      "summary": "工作区混入与 AIO-17 无关的未提交改动（IDEA.md、docs/closed-loop-workflow.md、specs/*、docs/field-feedback/、tasks/AIO-015~020 prompts，部分在 QA 会话期间仍在变动），属 PM/field-feedback 工作流而非本票代码，未触及任何 AIO-17 代码路径。",
-      "required_fix": "提交 AIO-17 时按路径精确 add 上述 8 个交付文件，勿混入文档工作流改动。"
-    }
+    {"id": "F-UI-1", "severity": "minor", "type": "ux", "acceptance_criterion_id": "AC-4", "summary": "app.js 中 Retry 按钮仅在 active/STOPPED 时禁用，PASS(COMPLETED)/QA_EXHAUSTED 终态下按钮可点击；服务端会拒绝（not eligible for retry），无绕过风险，但产生误导性可用态。", "required_fix": "retry.disabled 条件补充 PASS 终态（后续小票处理，不阻塞本票）"},
+    {"id": "F-UI-2", "severity": "minor", "type": "ux", "acceptance_criterion_id": "AC-3", "summary": "Hard Break 面板 allowed_human_actions 硬编码含 stop，但 HARD_BREAK 状态下 Stop 按钮禁用且服务端拒绝 stop（Run is not active），面板文案与实际可用动作不一致。", "required_fix": "hard_break details 的 allowed_human_actions 与服务端 stop 资格对齐（后续小票处理，不阻塞本票）"}
   ],
-  "scope_violations": [],
-  "security_violations": [],
-  "recommended_next_state": "PASS",
-  "environment_preconditions": "验收前确认真实 8765 端口空闲、真实 ~/.ticket-autopilot 不存在；全程仅使用 .qa-tmp/aio17 沙箱（临时 HOME/仓库副本/fake browser/QA 自有探针进程），结束后已清理，无残留进程或监听。"
+  "non_blocking_comments": [
+    "test_canonical_delivery_states 用合成注入 + 集合断言覆盖七状态，非真实流水线逐一触发；本次验收已在沙箱经真实生产路径逐一触发补齐证据。",
+    "developer_agent 伪造 override 在远程调用前被拒属结构性成立（record_owner_action 端点零远程副作用），测试未布置远程间谍显式断言顺序。",
+    "_json 统一 redact 未传 known_secrets（仅字段名 + token 模式），事件/state 写盘时已用 known_secrets 脱敏，实测无泄露路径，属纵深防御小缺口。"
+  ],
+  "recommended_next_state": "PASS"
 }

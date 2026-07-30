@@ -1,0 +1,82 @@
+{
+  "schema_version": "1.0",
+  "issue_key": "AIO-17",
+  "plane_issue_id": "bf7bd230-cfd3-4366-b7fd-0b803221b646",
+  "run_id": "aio-17-qa-20260730-1",
+  "qa_attempt": 1,
+  "verdict": "PASS",
+  "review_target": {
+    "base": "7af9930 (origin/main, 'clear the work area')",
+    "head": "68c8e42 'update 2 sets of prompts'（main ahead 1，未推送；AIO-17 交付物均为工作区未提交文件）",
+    "diff_scope": "AIO-17 相关改动 8 个文件：start-ticket-autopilot（新增根启动脚本）、src/ticket_autopilot/web.py（新增 517 行 Web/service/config 模块）、src/ticket_autopilot/static/{index.html,app.js,styles.css}（无构建静态页）、tests/test_web_service.py、tests/test_local_config.py（新增测试）、pyproject.toml（package-data 增加 static/*，1 行）。工作区同时存在与本票无关的 PM/field-feedback 文档改动（IDEA.md、docs/closed-loop-workflow.md、specs/*、docs/field-feedback/、tasks/AIO-015~020 prompts），未计入本票 diff。"
+  },
+  "commands": [
+    {"command": ".venv/bin/python -m pytest tests/test_web_service.py tests/test_local_config.py -q", "exit_code": 0, "result": "5 passed in 0.29s"},
+    {"command": ".venv/bin/python -m pytest -q", "exit_code": 0, "result": "146 passed, 2 subtests passed in 3.96s"},
+    {"note": "系统 python3 为 3.9.6 且无 pytest；按项目约定使用仓库 .venv（Python 3.12.13, pytest 9.1.1）执行必跑命令。"}
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC-1",
+      "status": "PASS",
+      "evidence": [
+        "在 .qa-tmp/aio17/repo 隔离副本（确认无预置 .venv）+ 临时 HOME + BROWSER 指向 fake 脚本执行 ./start-ticket-autopilot：bootstrap 自建 .venv(Python 3.12.13)，命令返回 0",
+        "命令返回后 curl http://127.0.0.1:8765/api/health 返回 {status:ok, service_id 匹配 service.json}；lsof 显示仅绑定 127.0.0.1:8765",
+        "fake browser 日志恰好 1 条 URL 调用"
+      ]
+    },
+    {
+      "id": "AC-2",
+      "status": "PASS",
+      "evidence": [
+        "对健康实例二次 start：exit 0，service.json pid 不变（50228），lsof 监听进程数=1，pgrep 'ticket_autopilot.web server' 计数=1，browser 日志新增第 2 条（仅重开页面）"
+      ]
+    },
+    {
+      "id": "AC-3",
+      "status": "PASS",
+      "evidence": [
+        "POST /api/config 保存 Plane/repository/Agent 设置，返回体 api_key 为 ********；restart 后 GET /api/config 非敏感字段逐项一致、api_key 仍为掩码",
+        "权限：~/.ticket-autopilot 与 logs/ 为 drwx------(0700)，config.json/service.json/server.log 为 -rw-------(0600)",
+        "回传掩码不覆盖真实密钥：POST api_key='********' 后 config.json 中真实值保留；server.log、service.json、页面 HTML 中均无明文密钥"
+      ]
+    },
+    {
+      "id": "AC-4",
+      "status": "PASS",
+      "evidence": [
+        "构造 pid=987654 的 stale service.json 后 start：安全恢复，exit 0，新服务健康",
+        "QA 自有探针进程占用 8765 后 start：exit 1，stderr 明确报 'in use by another process'；探针进程 kill -0 确认存活，仅由 QA 自行清理",
+        "代码层：唯一致命信号 os.killpg(web.py:369) 前置 _matches_process 校验（PID+进程组组长+一次性 service_id 出现在 ps command 中）"
+      ]
+    },
+    {
+      "id": "AC-5",
+      "status": "PASS",
+      "evidence": [
+        "stopped 态：status=1 / stop=0 / restart=0；running 态：status=0 / restart=0（pid 56583→56662）/ stop=0",
+        "stop 后 server.log 保留且可读（0 字节属预期：handler 刻意抑制请求日志防密钥泄露，stdout/stderr 无异常输出）；stop 后 pgrep 无残留服务进程"
+      ]
+    }
+  ],
+  "static_checks": [
+    "bind 严格 127.0.0.1：HOST 常量硬编码(web.py:28)，ThreadingHTTPServer((HOST, port))(web.py:480)，全部交付文件无 0.0.0.0",
+    "API key 不进入命令行/HTML/异常/日志：server 子命令仅携带 --port/--service-id/--home；log_message 全量抑制(web.py:473-475)；错误响应为固定文案",
+    "stop/restart 发信号前经 _is_owned_running/_matches_process 校验 owned record，从不裸 kill 记录 PID",
+    "bootstrap 不要求全局安装或手工激活 .venv：脚本自建 venv + pip install --editable 后 exec",
+    "静态页零 Node/React 依赖：纯 HTML/CSS/vanilla JS，无 package.json、无模块系统"
+  ],
+  "findings": [
+    {
+      "id": "QA-001",
+      "severity": "minor",
+      "type": "SCOPE_VIOLATION",
+      "summary": "工作区混入与 AIO-17 无关的未提交改动（IDEA.md、docs/closed-loop-workflow.md、specs/*、docs/field-feedback/、tasks/AIO-015~020 prompts，部分在 QA 会话期间仍在变动），属 PM/field-feedback 工作流而非本票代码，未触及任何 AIO-17 代码路径。",
+      "required_fix": "提交 AIO-17 时按路径精确 add 上述 8 个交付文件，勿混入文档工作流改动。"
+    }
+  ],
+  "scope_violations": [],
+  "security_violations": [],
+  "recommended_next_state": "PASS",
+  "environment_preconditions": "验收前确认真实 8765 端口空闲、真实 ~/.ticket-autopilot 不存在；全程仅使用 .qa-tmp/aio17 沙箱（临时 HOME/仓库副本/fake browser/QA 自有探针进程），结束后已清理，无残留进程或监听。"
+}
