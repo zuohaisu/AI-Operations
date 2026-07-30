@@ -34,11 +34,8 @@ build/
 tmp/
 scratch/
 *.bak
+.qa-tmp/
 
-# Local AIO-20 visual-QA sandbox; never commit its nested repo or test config.
-.qa-tmp/aio20-visual/
-.qa-tmp/aio20-visual-evidence.json
-.qa-tmp/qa_aio20_visual_sandbox.py
 
 # Ticket Autopilot runtime artifacts (spec §12.4)
 .ticket-autopilot/
