@@ -27,6 +27,8 @@ from urllib.parse import urlparse
 from ticket_autopilot.connectors import plane
 from ticket_autopilot.services.prompt_resolver import PromptPreparationError, PromptResolver
 from ticket_autopilot.services.ticket_contract import preflight_plane_issue, readiness_errors
+from ticket_autopilot.services.run_manager import RunManager
+from ticket_autopilot.services.web_agent_loop import WebAgentLoop, WebAgentLoopError
 from urllib.request import Request, urlopen
 import webbrowser
 
@@ -413,10 +415,12 @@ def _process_command(pid: int) -> str | None:
 class TicketBoard:
     """Thin Web boundary over the existing Plane connector and ticket contract."""
 
-    def __init__(self, settings: LocalConfig, *, repository: str | Path | None = None, planner: Callable[..., dict[str, str]] | None = None):
+    def __init__(self, settings: LocalConfig, *, repository: str | Path | None = None, planner: Callable[..., dict[str, str]] | None = None,
+                 web_loop_factory: Callable[..., WebAgentLoop] | None = None):
         self.settings = settings
         self.repository = Path(repository or Path.cwd()).resolve()
         self.planner = planner
+        self.web_loop_factory = web_loop_factory or self._default_web_loop
 
     def list(self) -> dict[str, Any]:
         items = plane.list_work_items(**self._plane_options())
@@ -440,6 +444,88 @@ class TicketBoard:
         except PromptPreparationError as exc:
             return {"status": "BLOCKED_REQUIREMENTS", "reason": str(exc), "developer_calls": 0, "qa_calls": 0}
         return {**prepared, "developer_calls": 0, "qa_calls": 0}
+
+    def run(self, issue_id: str) -> dict[str, Any]:
+        """Start a prepared Web Run and return its id before Agent work begins."""
+        item = plane.fetch_issue(issue_id, **self._plane_options())
+        detail = self._detail(item)
+        if not detail["eligible"]:
+            return {"status": "BLOCKED_REQUIREMENTS", "reason": detail["reason"], "run_id": None,
+                    "developer_calls": 0, "qa_calls": 0}
+        paths = PromptResolver(self.repository).canonical_paths(detail["identifier"])
+        try:
+            developer_prompt = paths["dev"].read_text(encoding="utf-8")
+            qa_prompt = paths["acceptance"].read_text(encoding="utf-8")
+        except OSError:
+            return {"status": "BLOCKED_REQUIREMENTS", "reason": "Run requires prepared Developer and QA Prompts",
+                    "run_id": None, "developer_calls": 0, "qa_calls": 0}
+        try:
+            return self.web_loop_factory(settings=self.settings, repository=self.repository).start(
+                detail["ticket_spec"], developer_prompt=developer_prompt, qa_prompt=qa_prompt,
+            )
+        except WebAgentLoopError as exc:
+            return {"status": "BLOCKED_REQUIREMENTS", "reason": str(exc), "run_id": None,
+                    "developer_calls": 0, "qa_calls": 0}
+
+    @staticmethod
+    def _default_web_loop(*, settings: LocalConfig, repository: Path) -> WebAgentLoop:
+        """Build the one product adapter; individual external calls remain isolated."""
+        from ticket_autopilot.connectors import qa
+        from ticket_autopilot.engine import drivers
+
+        config = settings.load(redacted=False)["agents"]
+        developer_command, qa_command = config.get("developer"), config.get("qa")
+        if not developer_command or not qa_command:
+            raise WebAgentLoopError("BLOCKED_REQUIREMENTS: configure Developer and QA Agent commands")
+
+        def developer(**kwargs: Any) -> Any:
+            run = kwargs["run"]
+            agent = {"role": "developer", "command": developer_command, "cwd": run["worktree"],
+                     "permission_mode": "write", "tools": ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
+                     "allowed_roots": [run["worktree"]], "system": kwargs["prompt"] + "\nDo not run git commit."}
+            return drivers.cli_call(agent, {key: kwargs[key] for key in ("ticket_spec", "findings")},
+                                    {"agent": "developer"}, str(repository))
+
+        def checker(run, *, qa_attempt: int) -> dict[str, Any]:
+            spec = json.loads((Path(run.artifact_dir) / "ticket-spec.json").read_text(encoding="utf-8"))
+            commands = [item["command"] for item in spec["verification"] if item["type"] in {"automated", "query"}]
+            commands.extend(spec["required_checks"])
+            checks = []
+            for command in commands:
+                proc = subprocess.run(["/bin/sh", "-c", command], cwd=run.worktree, capture_output=True,
+                                      text=True, stdin=subprocess.DEVNULL, timeout=60, check=False)
+                checks.append({"command": command, "exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr})
+            diff_proc = subprocess.run(["git", "diff", "--no-ext-diff", run.base_sha], cwd=run.worktree,
+                                       capture_output=True, text=True, check=False)
+            files_proc = subprocess.run(["git", "diff", "--name-only", run.base_sha], cwd=run.worktree,
+                                        capture_output=True, text=True, check=False)
+            untracked_proc = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"], cwd=run.worktree,
+                                             capture_output=True, text=True, check=False)
+            changed_files = [line for line in files_proc.stdout.splitlines() if line]
+            diff_parts = [diff_proc.stdout]
+            for path in (line for line in untracked_proc.stdout.splitlines() if line):
+                # ``--no-index`` returns 1 for a real textual difference.
+                untracked_diff = subprocess.run(["git", "diff", "--no-index", "--", "/dev/null", path], cwd=run.worktree,
+                                                capture_output=True, text=True, check=False)
+                if untracked_diff.returncode not in {0, 1}:
+                    return {"verified": False, "checks": checks, "changed_files": changed_files,
+                            "diff": "", "qa_attempt": qa_attempt}
+                changed_files.append(path)
+                diff_parts.append(untracked_diff.stdout)
+            return {"verified": diff_proc.returncode == 0 and files_proc.returncode == 0 and untracked_proc.returncode == 0
+                                and bool(changed_files) and all(item["exit_code"] == 0 for item in checks),
+                    "checks": checks, "changed_files": changed_files, "diff": "".join(diff_parts),
+                    "qa_attempt": qa_attempt}
+
+        def independent_qa(**kwargs: Any) -> Any:
+            run = kwargs["run"]
+            agent = dict(qa.QA_AGENT, command=qa_command, cwd=run["worktree"], allowed_roots=[run["worktree"]])
+            return qa.run_qa(agent=agent, engine_root=str(repository), ticket_spec=kwargs["ticket_spec"],
+                             diff=kwargs["diff"], test_evidence={"checks": kwargs["check_evidence"]},
+                             run_id=run["run_id"], qa_attempt=kwargs["qa_attempt"],
+                             ticket_context=kwargs["prompt"])
+
+        return WebAgentLoop(RunManager(repository), developer=developer, checker=checker, qa=independent_qa)
 
     def _summary(self, item: dict[str, Any]) -> dict[str, Any]:
         detail = self._detail(item)
@@ -507,7 +593,8 @@ class SettingsHandler(BaseHTTPRequestHandler):
         board = getattr(self.server, "ticket_board", None)
         if board is None:
             board = TicketBoard(self.settings, repository=getattr(self.server, "project_root", Path.cwd()),
-                                planner=getattr(self.server, "planner_adapter", None))
+                                planner=getattr(self.server, "planner_adapter", None),
+                                web_loop_factory=getattr(self.server, "web_loop_factory", None))
             self.server.ticket_board = board  # type: ignore[attr-defined]
         return board
 
@@ -536,6 +623,13 @@ class SettingsHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
+        if path.startswith("/api/tickets/") and path.endswith("/run"):
+            issue_id = path.removeprefix("/api/tickets/").removesuffix("/run").rstrip("/")
+            try:
+                self._json(HTTPStatus.OK, self.tickets.run(issue_id))
+            except (plane.PlaneAPIError, ValueError) as exc:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc), "developer_calls": 0, "qa_calls": 0})
+            return
         if path.startswith("/api/tickets/") and path.endswith("/prepare"):
             issue_id = path.removeprefix("/api/tickets/").removesuffix("/prepare").rstrip("/")
             try:

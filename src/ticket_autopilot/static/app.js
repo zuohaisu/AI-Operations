@@ -41,12 +41,18 @@ async function loadDetail(id) {
       const row = document.createElement('p'); row.append(document.createElement('strong'), text(` ${value ?? '—'}`)); row.firstChild.textContent = `${label}:`; detailBody.append(row);
     }
     document.querySelector('#prepare').disabled = !selected.eligible;
+    document.querySelector('#run').disabled = !selected.eligible;
   } catch (error) { ticketsStatus.textContent = error.message; }
 }
 document.querySelector('#refresh').addEventListener('click', loadTickets);
 document.querySelector('#prepare').addEventListener('click', async () => {
   if (!selected) return; prepareResult.textContent = 'Preparing…';
   try { const result = await json(`/api/tickets/${encodeURIComponent(selected.id)}/prepare`, {method: 'POST'}); prepareResult.textContent = result.status === 'READY' ? `Ready: dev=${result.prompts.dev.source}, acceptance=${result.prompts.acceptance.source}` : `${result.status}: ${result.hard_break_reason || result.reason}`; }
+  catch (error) { prepareResult.textContent = error.message; }
+});
+document.querySelector('#run').addEventListener('click', async () => {
+  if (!selected) return; prepareResult.textContent = 'Starting isolated Run…';
+  try { const result = await json(`/api/tickets/${encodeURIComponent(selected.id)}/run`, {method: 'POST'}); prepareResult.textContent = result.run_id ? `Run started: ${result.run_id}` : `${result.status}: ${result.reason}`; }
   catch (error) { prepareResult.textContent = error.message; }
 });
 form.addEventListener('submit', async (event) => {

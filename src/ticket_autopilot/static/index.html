@@ -12,7 +12,7 @@
     <section aria-labelledby="tickets-heading"><div class="section-head"><h2 id="tickets-heading">Open Plane tickets</h2><button id="refresh" type="button">Refresh</button></div>
       <output id="tickets-status" aria-live="polite"></output><div id="tickets" class="ticket-list"></div>
     </section>
-    <section id="detail" hidden aria-labelledby="detail-heading"><h2 id="detail-heading">Ticket preparation</h2><div id="detail-body"></div><button id="prepare" type="button">Prepare Run prompts</button><output id="prepare-result" aria-live="polite"></output></section>
+    <section id="detail" hidden aria-labelledby="detail-heading"><h2 id="detail-heading">Ticket preparation</h2><div id="detail-body"></div><button id="prepare" type="button">Prepare Run prompts</button><button id="run" type="button">Run Developer / QA loop</button><output id="prepare-result" aria-live="polite"></output></section>
     <details><summary>Local settings</summary><form id="settings">
       <fieldset><legend>Plane</legend><label>Workspace <input name="workspace" autocomplete="off"></label><label>Project <input name="project" autocomplete="off"></label><label>API key <input name="api_key" type="password" autocomplete="off" placeholder="Not configured"></label></fieldset>
       <fieldset><legend>Local repository</legend><label>Repository <input name="repository" autocomplete="off"></label></fieldset>

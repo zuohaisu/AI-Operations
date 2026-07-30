@@ -64,6 +64,26 @@ def test_ineligible_or_active_ticket_cannot_start_developer_or_qa(tmp_path: Path
     assert result["developer_calls"] == result["qa_calls"] == 0
 
 
+def test_run_returns_owned_run_id_without_waiting_for_agent_work(tmp_path: Path):
+    calls = []
+
+    class FakeLoop:
+        def start(self, ticket_spec, *, developer_prompt, qa_prompt):
+            calls.append((ticket_spec, developer_prompt, qa_prompt))
+            return {"status": "ACTIVE", "run_id": "aio-19-fake"}
+
+    service = board(tmp_path)
+    (tmp_path / "tasks" / "AIO-018-dev-prompt.md").write_text("dev", encoding="utf-8")
+    (tmp_path / "tasks" / "AIO-018-acceptance-prompt.md").write_text("qa", encoding="utf-8")
+    service.web_loop_factory = lambda **_kwargs: FakeLoop()
+    started = plane.normalize_work_item(raw())
+    with mock.patch("ticket_autopilot.web.plane.fetch_issue", return_value=started):
+        result = service.run(started["id"])
+
+    assert result == {"status": "ACTIVE", "run_id": "aio-19-fake"}
+    assert calls and calls[0][0]["issue_key"] == "AIO-18" and calls[0][1:] == ("dev", "qa")
+
+
 def test_invalid_v2_semantics_are_not_listed_or_sent_to_planner(tmp_path: Path):
     service = board(tmp_path, planner=mock.Mock())
     invalid = raw("started", identifier="")
