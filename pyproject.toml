@@ -22,4 +22,4 @@ ticket-controller = "ticket_autopilot.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-ticket_autopilot = ["schemas/*.json", "workflows/*.yaml"]
+ticket_autopilot = ["schemas/*.json", "workflows/*.yaml", "static/*.html", "static/*.css", "static/*.js"]

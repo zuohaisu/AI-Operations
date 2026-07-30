@@ -1,85 +1,82 @@
 {
   "schema_version": "1.0",
-  "issue_key": "AIO-14",
-  "plane_issue_id": "550a1f3c-4cac-458b-bed7-252045fd2f12",
-  "run_id": "aio-14-qa-20260730-4",
-  "qa_attempt": 4,
+  "issue_key": "AIO-17",
+  "plane_issue_id": "bf7bd230-cfd3-4366-b7fd-0b803221b646",
+  "run_id": "aio-17-qa-20260730-1",
+  "qa_attempt": 1,
   "verdict": "PASS",
   "review_target": {
-    "base": "b421f0e (origin/main, 'uv.lock')",
-    "head": "59c5b0b 'AIO-14 make preflight test fork-safe'（含 a499a96/563470d/5998a75，main ahead 4，未推送）",
-    "diff_scope": "第四轮增量（a499a96→59c5b0b）：仅 tests/test_cli.py +4/-3——将 test_cli_prints_actionable_preflight_error_without_secret 重命名为 test_dispatch_prints_actionable_preflight_error_without_secret 并从 cli.main(['run',...]) 改为 build_parser().parse_args + cli._dispatch(args)，绕过 fork 边界直测 dispatch 层错误格式化；capsys 断言与 secret 屏蔽保留。产品代码 cli.py 未改动"
+    "base": "7af9930 (origin/main, 'clear the work area')",
+    "head": "68c8e42 'update 2 sets of prompts'（main ahead 1，未推送；AIO-17 交付物均为工作区未提交文件）",
+    "diff_scope": "AIO-17 相关改动 8 个文件：start-ticket-autopilot（新增根启动脚本）、src/ticket_autopilot/web.py（新增 517 行 Web/service/config 模块）、src/ticket_autopilot/static/{index.html,app.js,styles.css}（无构建静态页）、tests/test_web_service.py、tests/test_local_config.py（新增测试）、pyproject.toml（package-data 增加 static/*，1 行）。工作区同时存在与本票无关的 PM/field-feedback 文档改动（IDEA.md、docs/closed-loop-workflow.md、specs/*、docs/field-feedback/、tasks/AIO-015~020 prompts），未计入本票 diff。"
   },
+  "commands": [
+    {"command": ".venv/bin/python -m pytest tests/test_web_service.py tests/test_local_config.py -q", "exit_code": 0, "result": "5 passed in 0.29s"},
+    {"command": ".venv/bin/python -m pytest -q", "exit_code": 0, "result": "146 passed, 2 subtests passed in 3.96s"},
+    {"note": "系统 python3 为 3.9.6 且无 pytest；按项目约定使用仓库 .venv（Python 3.12.13, pytest 9.1.1）执行必跑命令。"}
+  ],
   "acceptance_criteria": [
     {
       "id": "AC-1",
       "status": "PASS",
       "evidence": [
-        "第三轮干净安装证据维持有效（uv venv 3.11 + 'uv pip install -e .[dev]'）；--help 四子命令齐全、resume 计数 0；本轮 diff 未触及安装面"
+        "在 .qa-tmp/aio17/repo 隔离副本（确认无预置 .venv）+ 临时 HOME + BROWSER 指向 fake 脚本执行 ./start-ticket-autopilot：bootstrap 自建 .venv(Python 3.12.13)，命令返回 0",
+        "命令返回后 curl http://127.0.0.1:8765/api/health 返回 {status:ok, service_id 匹配 service.json}；lsof 显示仅绑定 127.0.0.1:8765",
+        "fake browser 日志恰好 1 条 URL 调用"
       ]
     },
     {
       "id": "AC-2",
       "status": "PASS",
       "evidence": [
-        "controller/pipeline 接线未改；test_run_uses_real_pipeline_interface_and_retains_run_id 通过；src/ 无 '[stub]'"
+        "对健康实例二次 start：exit 0，service.json pid 不变（50228），lsof 监听进程数=1，pgrep 'ticket_autopilot.web server' 计数=1，browser 日志新增第 2 条（仅重开页面）"
       ]
     },
     {
       "id": "AC-3",
       "status": "PASS",
       "evidence": [
-        "非确定性根因消除：本 QA 机确认 pytest 为进程组组长（os.getpgrp()==os.getpid() 为 True，即前三轮复现红的同一环境），组长上下文 'run AIO-14' 缺凭证 → stderr 恰一行 CREDENTIAL_REQUIRED、stdout 0 行、exit=3",
-        "os._exit 硬退出未回退（cli.py 自 a499a96 起零改动，grep 确认 _run_in_isolated_process 与两处 os._exit 仍在）；in-process main(['run',...]) + capsys 覆盖 fork 路径已删除，改测 _dispatch 层，断言意图不变且不再受宿主组身份影响",
-        "真实 subprocess 组长探针 test_group_leader_subprocess_relays_preflight_exit_once 保留并通过（断言 exit==3 且 CREDENTIAL_REQUIRED 恰一次）"
+        "POST /api/config 保存 Plane/repository/Agent 设置，返回体 api_key 为 ********；restart 后 GET /api/config 非敏感字段逐项一致、api_key 仍为掩码",
+        "权限：~/.ticket-autopilot 与 logs/ 为 drwx------(0700)，config.json/service.json/server.log 为 -rw-------(0600)",
+        "回传掩码不覆盖真实密钥：POST api_key='********' 后 config.json 中真实值保留；server.log、service.json、页面 HTML 中均无明文密钥"
       ]
     },
     {
       "id": "AC-4",
       "status": "PASS",
       "evidence": [
-        "status 路径未改；test_status_cancel_and_cleanup_use_owned_run_only 通过；第一轮三态承重字段实测证据维持有效"
+        "构造 pid=987654 的 stale service.json 后 start：安全恢复，exit 0，新服务健康",
+        "QA 自有探针进程占用 8765 后 start：exit 1，stderr 明确报 'in use by another process'；探针进程 kill -0 确认存活，仅由 QA 自行清理",
+        "代码层：唯一致命信号 os.killpg(web.py:369) 前置 _matches_process 校验（PID+进程组组长+一次性 service_id 出现在 ps command 中）"
       ]
     },
     {
       "id": "AC-5",
       "status": "PASS",
       "evidence": [
-        "cancel/cleanup 语义未改；隔离组 getpgrp 记录 + _owns_live_process 双验证 + 保守拒清逻辑全部维持有效"
-      ]
-    },
-    {
-      "id": "AC-6",
-      "status": "PASS",
-      "evidence": [
-        "_exit_code 白名单契约未变，参数化 6 例通过；父进程 waitpid 转发子进程 os._exit 的真实 run 退出码；组长/非组长实测无任何非成功态返回 0"
+        "stopped 态：status=1 / stop=0 / restart=0；running 态：status=0 / restart=0（pid 56583→56662）/ stop=0",
+        "stop 后 server.log 保留且可读（0 字节属预期：handler 刻意抑制请求日志防密钥泄露，stdout/stderr 无异常输出）；stop 后 pgrep 无残留服务进程"
       ]
     }
   ],
-  "commands": [
+  "static_checks": [
+    "bind 严格 127.0.0.1：HOST 常量硬编码(web.py:28)，ThreadingHTTPServer((HOST, port))(web.py:480)，全部交付文件无 0.0.0.0",
+    "API key 不进入命令行/HTML/异常/日志：server 子命令仅携带 --port/--service-id/--home；log_message 全量抑制(web.py:473-475)；错误响应为固定文案",
+    "stop/restart 发信号前经 _is_owned_running/_matches_process 校验 owned record，从不裸 kill 记录 PID",
+    "bootstrap 不要求全局安装或手工激活 .venv：脚本自建 venv + pip install --editable 后 exec",
+    "静态页零 Node/React 依赖：纯 HTML/CSS/vanilla JS，无 package.json、无模块系统"
+  ],
+  "findings": [
     {
-      "command": ".venv/bin/python3 -m pytest tests/test_cli.py tests/integration/test_cli_lifecycle.py -q",
-      "result": "14 passed in 0.40s, EXIT=0（组长宿主，本机 is_group_leader=True）"
-    },
-    {
-      "command": ".venv/bin/python3 -m pytest -q",
-      "result": "141 passed, 2 subtests passed in 3.53s, EXIT=0（组长宿主全量回归，无失败、无跳过遗漏）"
+      "id": "QA-001",
+      "severity": "minor",
+      "type": "SCOPE_VIOLATION",
+      "summary": "工作区混入与 AIO-17 无关的未提交改动（IDEA.md、docs/closed-loop-workflow.md、specs/*、docs/field-feedback/、tasks/AIO-015~020 prompts，部分在 QA 会话期间仍在变动），属 PM/field-feedback 工作流而非本票代码，未触及任何 AIO-17 代码路径。",
+      "required_fix": "提交 AIO-17 时按路径精确 add 上述 8 个交付文件，勿混入文档工作流改动。"
     }
   ],
-  "safety_checks": [
-    "确定性达成核验：本机确认 pytest 为进程组组长，两条必跑命令均 EXIT=0；前三轮该环境下必现的失败已消除，验收不再依赖宿主进程组身份",
-    "产品行为未被迁就削弱：cli.py os._exit/隔离逻辑零改动（git diff a499a96..59c5b0b 仅 tests/test_cli.py），未回退到第二轮的栈重放/错误 exit-code 风险",
-    "改动仅限单条测试用例格式化断言，无 scope 蔓延；subprocess 真实探针继续覆盖 fork 边界的输出/退出码契约",
-    "第四轮实测使用 env -i + .qa-tmp 临时 venv/仓库与 OS 级 fd 重定向，无真实 Plane/GitHub/Agent 请求；验收全程未改 src/tests/workflow，仅更新本 verdict；QA 临时资源位于 .qa-tmp（不入库，验收后清理）"
-  ],
-  "findings": [],
-  "non_blocking_comments": [
-    "四轮闭环收束：R1 定位 setsid 早于 preflight + EPERM(exit5)；R2 定位 fork 子进程栈重放(exit0 假成功)；R3 定位 os._exit 正确但 in-process capsys 测试宿主依赖；R4 以最小测试侧修复达成组长宿主确定性。修复分层清晰、无 scope 蔓延。",
-    "测试分工现已正确：_dispatch 单测覆盖错误格式化/secret 屏蔽（fork 边界以下），subprocess 探针覆盖真实进程边界的 exit=3 + 单份输出；两者互补且均不依赖宿主组身份。",
-    "延续前轮 minor（不影响承重，供后续工单斟酌）：README 安装文档 python3.11/pip 与本机 uv 实际路径的环境说明；cleanup 对零新增提交分支的 'merged branch' 措辞。",
-    "环境偏差（延续 AIO-11~13 记录）：提示词字面 'python3 -m pytest' 经 .venv/bin/python3 执行；干净安装经 uv --python 3.11 完成——不影响退出码结论。"
-  ],
-  "scope_violation": "none（本轮增量仅单条测试用例；产品代码未动）",
-  "security_violation": "none（无新增凭证面；错误输出无 secret 值；_dispatch 单测断言 stderr 无 'secret'）",
-  "recommended_next_state": "READY_FOR_HUMAN_REVIEW — AC-1~AC-6 全部 PASS，两条必跑命令在组长宿主 EXIT=0，非确定性根因消除且 os._exit 未回退；建议人工在干净环境复核 install/help/mock lifecycle 后合入"
+  "scope_violations": [],
+  "security_violations": [],
+  "recommended_next_state": "PASS",
+  "environment_preconditions": "验收前确认真实 8765 端口空闲、真实 ~/.ticket-autopilot 不存在；全程仅使用 .qa-tmp/aio17 沙箱（临时 HOME/仓库副本/fake browser/QA 自有探针进程），结束后已清理，无残留进程或监听。"
 }
