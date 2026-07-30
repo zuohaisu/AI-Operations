@@ -8,15 +8,15 @@
 - `[Goal check]`：推进「Independent QA / evidence integrity」，证据 = 交叉核对页面、API、events/state、owned process 和视觉证据，确认无假进度、越界控制或 Secret 泄露。
 
 ## 验收准备
-- 重跑 AIO-19 readiness；票状态不是能力证据。
+- 重跑 `.venv/bin/python -m pytest tests/integration/test_web_agent_loop.py -q`，expected = exit 0，并记录本次 checked-at；票状态不是能力证据。
 - 读原票、Dev Prompt、事件 schema、所有生产者/消费者、Retry/Stop 所有权代码和 diff。
-- 记录 base/head、ticket-owned files 与 pre-existing dirty paths；归因不清时 `BLOCKED_ATTRIBUTION`。
+- 记录 base/head、ticket-owned files 与 pre-existing dirty paths；可机械拆分的混合 Diff 为 `DIFF_SPLIT_REQUIRED`，只有归属事实无法确定时才 `BLOCKED_ATTRIBUTION`。
 - 所有控制测试使用临时进程；不得操作用户真实服务/Run。
 
 ## AC 证据矩阵
-- AC-1：逐事件比对 Timeline 与 artifacts；时间、stage、role、round、findings、changed files、SHA 均一致。
+- AC-1：逐事件比对 Timeline 与 artifacts；时间、stage、role、round、findings、changed files、SHA 均一致；七个 canonical delivery states 必须来自持久事件，不能由前端猜测。
 - AC-2：关闭页面后 owned worker 仍运行；重开后仅靠 persisted state/events 恢复。
-- AC-3：Developer/QA/runtime Hard Break 分别呈现正确上下文，不映射成 QA FAIL/PASS；Repo Owner visual accept/override 显示 actor/action/time/reason，且原始 pending/fail 事件仍可追溯。
+- AC-3：Developer/QA/runtime Hard Break 分别呈现正确上下文，不映射成 QA FAIL/PASS；Repo Owner visual accept、`override_gate`、feature-branch push、Draft PR、merge 显示 actor/action/approved_at/reason，且原始 pending/fail 事件仍可追溯；伪造 `actor_type=developer_agent` 的 override/merge 必须在任何远程调用前拒绝。
 - AC-4：Retry 沿用 run_id、历史长度只增不减，并重新触发后续 checks/QA/Commit 门禁。
 - AC-5：Stop 的目标等于 owned process group；foreign process call=0，artifacts 保留。
 - AC-6：递归注入 Secret 到异常/事件/findings 后，API/HTML/DOM/log/raw artifact 均无完整值。
@@ -26,6 +26,8 @@
 python3 -m pytest tests/test_web_run_tracking.py tests/integration/test_web_hard_break.py -q
 python3 -m pytest -q
 ```
+
+必须覆盖并逐项核对：`QA_PENDING`、`HUMAN_VISUAL_REVIEW_PENDING`、`READY_FOR_REVIEW`、`DIFF_SPLIT_REQUIRED`、`USER_OVERRIDE_APPROVED`、`MERGE_AUTHORIZED_BY_USER`、`TECHNICAL_BLOCKED`。状态、warning、authorization 和原始 verdict 不得互相覆盖。
 
 ## 浏览器与视觉验收
 - 记录 viewport、URL 和 running/FAIL/Hard Break/COMPLETED 四种截图或等价可复核证据。
@@ -41,10 +43,16 @@ python3 -m pytest -q
 verdict: PASS | FAIL | BLOCKED
 issue_key: AIO-20
 acceptance_criteria: []
-attribution_status: CLEAN | BLOCKED_ATTRIBUTION
+attribution_status: CLEAN | DIFF_SPLIT_REQUIRED | BLOCKED_ATTRIBUTION
 visual_evidence:
-  status: PASS | FAIL | BLOCKED
+  status: PASS | FAIL | HUMAN_VISUAL_REVIEW_PENDING | BLOCKED
   sources: []
+delivery_states_observed: []
+owner_actions:
+  - actor: <repo owner>
+    action: <visual_accept | override_gate | push_feature_branch | create_draft_pr | merge>
+    approved_at: <ISO-8601>
+    reason: <non-empty>
 secret_leaks: []
 findings: []
 recommended_next_state: PASS | FIXING | BLOCKED_NEEDS_HUMAN

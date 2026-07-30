@@ -8,7 +8,7 @@
 - `[Goal check]`：推进「Independent QA / bounded loop proof」，证据 = 独立验证五轮上限、角色隔离、Hard Break 分类、PASS-before-Commit 和 singleton 语义。
 
 ## 验收准备
-- 重跑 AIO-17/18 readiness commands；状态标签不算依赖证据。
+- 重跑 `.venv/bin/python -m pytest tests/test_web_service.py tests/test_local_config.py tests/test_web_tickets.py tests/test_prompt_resolver.py -q`，expected = exit 0，并记录本次 checked-at；状态标签不算依赖证据。
 - 读原票、Dev Prompt、Controller/pipeline/verifier/Run Manager 和完整 diff。
 - 记录 base/head、ticket-owned Worktree、pre-existing dirty paths；可机械分离的他票提交/文件应报告 `DIFF_SPLIT_REQUIRED` 和精确拆分方案，只有归属事实无法确定时才 `BLOCKED_ATTRIBUTION`。
 - 读取 repository invariants；不得建议把强制随附测试/契约更新推迟到另一票。
@@ -19,7 +19,7 @@
 - AC-3：断言 `qa_attempt` 仅为 1..5；第五次可 PASS，第五次 FAIL 后 Developer/QA/Commit 不再调用。
 - AC-4：process error、timeout、malformed verdict、permission/environment failure 分别进入 Hard Break，不增加普通 FAIL 计数。
 - AC-5：Commit 发生在 schema-valid PASS 之后；stage 集合等于 ticket-owned changed files，message 含 AIO-19，Developer commit call=0。
-- AC-6：未 PASS、空/foreign/forbidden Diff 和 ownership ambiguity 各自 Commit=0。
+- AC-6：未 PASS、空/foreign/forbidden Diff 和 ownership ambiguity 各自 Commit=0；可机械分离的 foreign/mixed Diff 必须为 `DIFF_SPLIT_REQUIRED`，只有归属事实无法确定时才为 `BLOCKED_ATTRIBUTION`。
 - AC-7：active Run 下第二次请求在任何新 Worktree/Agent 前拒绝。
 
 ## 必跑命令
@@ -45,7 +45,8 @@ acceptance_criteria:
     evidence: <command/test/file:line>
 qa_attempts_observed: []
 call_sequence: []
-attribution_status: CLEAN | BLOCKED_ATTRIBUTION
+attribution_status: CLEAN | DIFF_SPLIT_REQUIRED | BLOCKED_ATTRIBUTION
+delivery_warnings: []
 findings: []
 recommended_next_state: PASS | FIXING | BLOCKED_NEEDS_HUMAN
 ```

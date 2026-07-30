@@ -12,11 +12,10 @@
 本工作推进「Development → Independent QA → Bounded Fix Loop」阶段，证据 = Web Run API 在单一 owned Worktree 中执行最多五次完整 QA，PASS 后才由 Controller 创建 ticket-scoped Commit，Hard Break 与 QA FAIL 保持互斥。
 
 ## 启动前硬门禁
-- AIO-17 readiness：`python3 -m pytest tests/test_web_service.py tests/test_local_config.py -q` 必须为 0。
-- AIO-18 readiness：`python3 -m pytest tests/test_web_tickets.py tests/test_prompt_resolver.py -q` 必须为 0。
+- AIO-17/AIO-18 readiness：`.venv/bin/python -m pytest tests/test_web_service.py tests/test_local_config.py tests/test_web_tickets.py tests/test_prompt_resolver.py -q`，expected = exit 0。
 - 记录 checked-at、base SHA、ticket-owned Worktree、pre-existing dirty paths 和 active Run；Plane 状态不替代 readiness evidence。
 - 盘点现有 `TicketController`、pipeline、development verifier、Run Manager 的调用方与守卫；列出改变 Commit/QA 顺序后会转红的全部测试。
-- 若依赖、归因或现有状态机语义无法确定，Agent spawn=0，返回 `BLOCKED_REQUIREMENTS`。
+- 若依赖或承重状态机语义无法确定，Agent spawn=0，返回 `BLOCKED_REQUIREMENTS`。若 Diff/提交可机械分离，返回 `DIFF_SPLIT_REQUIRED` 并给出精确拆分方案；只有归属事实无法确定时才返回 `BLOCKED_ATTRIBUTION`。
 
 ## Repository invariants
 - main 始终保持可交付；QA 前不得 Commit，PASS 后 Commit 只 stage 本 Run changed files。
@@ -44,7 +43,7 @@
 - AC-3：第五次 QA 仍可 PASS；第五次 FAIL 后为 `QA_EXHAUSTED`，Developer/Commit 后续调用均为 0。
 - AC-4：运行级 Hard Break 立即停止、保留 artifacts，且不计为普通 QA FAIL。
 - AC-5：schema-valid PASS 后，Controller 只提交本 Run 文件，记录 branch/SHA；Developer 未 Commit。
-- AC-6：未 PASS、空 Diff、forbidden path、越出 Worktree或无法归因时，Commit=0 并返回明确 Blocked/Hard Break。
+- AC-6：未 PASS、空 Diff、forbidden path、越出 Worktree或归属未解决时，Commit=0；可机械分离的混合 Diff 返回 `DIFF_SPLIT_REQUIRED`，真实归属不明返回 `BLOCKED_ATTRIBUTION`，运行级失败返回 Hard Break。
 - AC-7：已有 active Run 时第二次 Run 被拒绝，不产生第二组 Agent/Worktree。
 
 ## 确定性验证
