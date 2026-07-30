@@ -30,13 +30,21 @@ class FakeResponse:
 class PlaneConnectorTests(unittest.TestCase):
     def test_fetch_issue_uses_parameterized_project_browser_ua_and_key(self):
         plane._last_request_at = None
+        payload = {"id": "issue-1", "name": "AIO-8", "description": None, "identifier": None,
+                   "description_html": "<h2>Goal</h2><ul><li>keep structure</li></ul><pre><code>pytest -q</code></pre>",
+                   "description_stripped": "keep structure", "sequence_id": 8,
+                   "project": {"identifier": "AIO"}, "state": {"id": "state-1", "group": "started"}}
         with mock.patch("ticket_autopilot.connectors.plane.urllib.request.urlopen",
-                        return_value=FakeResponse({"id": "issue-1", "name": "AIO-8"})) as open_url:
+                        return_value=FakeResponse(payload)) as open_url:
             issue = plane.fetch_issue("issue-1", workspace="team", project_id="project-9", api_key="secret")
 
-        self.assertEqual(issue["name"], "AIO-8")
+        self.assertEqual(issue["identifier"], "AIO-8")
+        self.assertIn("## Goal", issue["description"])
+        self.assertIn("- keep structure", issue["description"])
+        self.assertIn("```", issue["description"])
+        self.assertEqual(issue["raw_source"]["description"], None)
         request = open_url.call_args.args[0]
-        self.assertTrue(request.full_url.endswith("/workspaces/team/projects/project-9/issues/issue-1/"))
+        self.assertIn("/workspaces/team/projects/project-9/work-items/issue-1/?expand=state,project", request.full_url)
         self.assertEqual(request.get_header("X-api-key"), "secret")
         self.assertEqual(request.get_header("User-agent"), plane.BROWSER_UA)
 

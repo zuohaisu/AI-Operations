@@ -152,7 +152,7 @@ def _plain(value: str) -> str:
 def _bullet_values(body: str) -> list[str]:
     values = []
     for line in body.splitlines():
-        match = re.match(r"\s*[-*]\s+(?:\[[ xX]\]\s*)?(.+?)\s*$", line)
+        match = re.match(r"\s*[-*]\s+(?:\[[ xX]\]|[☐☑✓])?\s*(.+?)\s*$", line)
         if match and (value := _plain(match.group(1))):
             values.append(value)
     return values
@@ -169,7 +169,7 @@ def _parse_acceptance_criteria(body: str) -> list[dict[str, str]]:
     criteria: list[dict[str, str]] = []
     for line in body.splitlines():
         match = re.match(
-            r"\s*[-*]\s+(?:\[[ xX]\]\s*)?(AC[-_ ]?[1-9][0-9]*)\s*[:\-–—]\s*(.+?)\s*$",
+            r"\s*[-*]\s+(?:\[[ xX]\]|[☐☑✓])?\s*(AC[-_ ]?[1-9][0-9]*)\s*[:\-–—]\s*(.+?)\s*$",
             line,
             flags=re.IGNORECASE,
         )
@@ -264,21 +264,16 @@ def _issue_key(issue: dict[str, Any]) -> str:
     for field in ("identifier", "issue_key", "key"):
         if value := issue.get(field):
             return str(value)
-    # A leading key in a Plane title is still a literal, auditable source value.
-    title = str(issue.get("name") or issue.get("title") or "")
-    match = re.match(r"\s*([A-Za-z][A-Za-z0-9_]*-[1-9][0-9]*)\b", title)
-    if match:
-        return match.group(1)
+    # Ticket keys are source data, never guessed from a mutable title.
     raise TicketContractError("Plane issue has no explicit issue key", field="issue_key")
 
 
 def _cancelled(issue: dict[str, Any]) -> bool:
     state = issue.get("state")
+    if isinstance(state, dict) and state.get("group"):
+        return str(state["group"]).casefold() == "cancelled"
     values = state.values() if isinstance(state, dict) else (state,)
-    return any(
-        value is not None and str(value).casefold() in {"cancelled", "canceled"}
-        for value in values
-    )
+    return any(value is not None and str(value).casefold() in {"cancelled", "canceled"} for value in values)
 
 
 def map_plane_issue(issue: dict[str, Any]) -> dict[str, Any]:
@@ -289,6 +284,13 @@ def map_plane_issue(issue: dict[str, Any]) -> dict[str, Any]:
     """
     if not isinstance(issue, dict):
         raise TicketContractError("Plane issue payload is not an object")
+    # Plane v2 carries deliberately-null legacy fields.  Normalize exactly once
+    # before parsing, retaining raw source/provenance on the normalized object.
+    if issue.get("description_html") is not None or isinstance(issue.get("project"), dict):
+        try:
+            issue = plane.normalize_work_item(issue)
+        except plane.PlaneNormalizationError as exc:
+            raise TicketContractError(str(exc), code="V2_NORMALIZATION_FAILED", field="source_issue") from exc
     issue_id = issue.get("id")
     if not issue_id:
         raise TicketContractError("Plane issue has no id", field="source_issue.id")
@@ -327,17 +329,17 @@ def map_plane_issue(issue: dict[str, Any]) -> dict[str, Any]:
             "every acceptance criterion must have exactly one verification entry", field="verification"
         )
 
-    source = "description"
+    source = str(issue.get("_description_provenance") or "description")
+    source_issue = {
+        "provider": "plane", "id": str(issue_id), "key": _issue_key(issue),
+        "title": title, "description": description,
+    }
+    if isinstance(issue.get("raw_source"), dict):
+        source_issue["raw_source"] = issue["raw_source"]
     return {
         "schema_version": "1.0",
         "issue_key": _issue_key(issue),
-        "source_issue": {
-            "provider": "plane",
-            "id": str(issue_id),
-            "key": _issue_key(issue),
-            "title": title,
-            "description": description,
-        },
+        "source_issue": source_issue,
         "goal": goal,
         "scope": scope,
         "out_of_scope": out_of_scope,
@@ -371,6 +373,28 @@ def _blocked(status: str, error: TicketContractError | str) -> dict[str, Any]:
     return {"status": status, "ticket_spec": None, "errors": [entry]}
 
 
+def readiness_errors(issue: dict[str, Any]) -> list[str]:
+    """Check ticket-owned operational evidence beyond the nine schema fields.
+
+    This is deliberately separate from the reusable v1 ticket-spec schema: it
+    applies the AIO-18 intake/Planner boundary without retroactively changing
+    AIO-10 callers that only need schema validation.
+    """
+    description = str(issue.get("description") or "").casefold()
+    checks = {
+        "impact closure": (("impact closure", "影响闭包"),),
+        "callers and consumers": (("caller",), ("consumer",)),
+        "triggered guards": (("trigger",), ("guard",)),
+        "executable dependencies": (("dependenc",),),
+        "behavioral acceptance criteria": (("given",), ("when",), ("then",)),
+        "upstream observed semantics": (("observ",), ("checked-at",), ("semantic mapping",)),
+        "global serial resources": (("serial",), ("127.0.0.1:8765",)),
+    }
+    missing = [name for name, groups in checks.items()
+               if not all(any(term in description for term in alternatives) for alternatives in groups)]
+    return [f"missing ticket readiness evidence: {name}" for name in missing]
+
+
 def preflight_plane_issue(issue: dict[str, Any]) -> dict[str, Any]:
     """Validate a Plane issue without spawning Planner, Executor, or QA Agents."""
     if not isinstance(issue, dict):
@@ -382,8 +406,9 @@ def preflight_plane_issue(issue: dict[str, Any]) -> dict[str, Any]:
     try:
         ticket_spec = map_plane_issue(issue)
     except TicketContractError as error:
-        # Ambiguous source fields need a PM decision; incomplete fields need editing.
-        status = "BLOCKED_NEEDS_HUMAN" if error.code == "AMBIGUOUS_FIELD" or error.field == "risk_tier" else "BLOCKED_REQUIREMENTS"
+        # Ambiguous/unknown v2 source semantics need a PM decision; incomplete
+        # contract fields are requirements failures before any Agent is invoked.
+        status = "BLOCKED_NEEDS_HUMAN" if error.code in {"AMBIGUOUS_FIELD", "V2_NORMALIZATION_FAILED"} or error.field == "risk_tier" else "BLOCKED_REQUIREMENTS"
         return _blocked(status, error)
 
     valid, errors = validate_ticket_spec(ticket_spec)

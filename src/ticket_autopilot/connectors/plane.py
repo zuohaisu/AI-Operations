@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import html
+from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
@@ -31,6 +32,116 @@ _last_request_at: float | None = None
 
 class PlaneAPIError(RuntimeError):
     """Raised when Plane rejects a request or its API cannot be reached."""
+
+
+class PlaneNormalizationError(ValueError):
+    """A Plane v2 work-item cannot be safely mapped into the intake contract."""
+
+
+_UNFINISHED_STATE_GROUPS = frozenset({"backlog", "unstarted", "started"})
+_TERMINAL_STATE_GROUPS = frozenset({"completed", "cancelled"})
+_KNOWN_STATE_GROUPS = _UNFINISHED_STATE_GROUPS | _TERMINAL_STATE_GROUPS
+
+
+class _MarkdownHTMLParser(HTMLParser):
+    """Deterministic HTML-to-Markdown conversion for Plane ticket contracts."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.list_depth = 0
+        self.in_pre = False
+
+    def handle_starttag(self, tag: str, _attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+            self.parts.append("\n\n" + "#" * int(tag[1]) + " ")
+        elif tag == "p":
+            self.parts.append("\n\n")
+        elif tag in {"ul", "ol"}:
+            self.list_depth += 1
+            self.parts.append("\n")
+        elif tag == "li":
+            self.parts.append("\n" + "  " * max(0, self.list_depth - 1) + "- ")
+        elif tag == "br":
+            self.parts.append("\n")
+        elif tag == "pre":
+            self.in_pre = True
+            self.parts.append("\n\n```\n")
+        elif tag == "code" and not self.in_pre:
+            self.parts.append("`")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"ul", "ol"}:
+            self.list_depth = max(0, self.list_depth - 1)
+            self.parts.append("\n")
+        elif tag == "pre":
+            self.in_pre = False
+            self.parts.append("\n```\n")
+        elif tag == "code" and not self.in_pre:
+            self.parts.append("`")
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+    def markdown(self) -> str:
+        lines = [line.rstrip() for line in "".join(self.parts).replace("\r\n", "\n").splitlines()]
+        result = "\n".join(lines).strip()
+        return result + ("\n" if result else "")
+
+
+def html_to_markdown(value: str) -> str:
+    """Convert Plane HTML while retaining headings, lists, and fenced code."""
+    if not isinstance(value, str) or not value.strip():
+        raise PlaneNormalizationError("description_html is required")
+    parser = _MarkdownHTMLParser()
+    parser.feed(value)
+    parser.close()
+    result = parser.markdown()
+    if not result.strip():
+        raise PlaneNormalizationError("description_html converted to an empty description")
+    return result
+
+
+def normalize_work_item(work_item: dict[str, Any]) -> dict[str, Any]:
+    """Map an expanded Plane v2 item without trusting legacy null fields."""
+    if not isinstance(work_item, dict):
+        raise PlaneNormalizationError("Plane work-item payload is not an object")
+    if work_item.get("_plane_normalization") == "v2":
+        return work_item
+    project, state, sequence_id = work_item.get("project"), work_item.get("state"), work_item.get("sequence_id")
+    if not isinstance(project, dict) or not isinstance(project.get("identifier"), str) or not project["identifier"].strip():
+        raise PlaneNormalizationError("expanded project.identifier is required")
+    if isinstance(sequence_id, bool) or not isinstance(sequence_id, int) or sequence_id < 1:
+        raise PlaneNormalizationError("positive sequence_id is required")
+    if not isinstance(state, dict) or not state.get("id") or not isinstance(state.get("group"), str):
+        raise PlaneNormalizationError("expanded state.id and state.group are required")
+    state_group = state["group"].casefold()
+    if state_group not in _KNOWN_STATE_GROUPS:
+        raise PlaneNormalizationError(f"unknown Plane state group: {state['group']}")
+    if not work_item.get("id"):
+        raise PlaneNormalizationError("Plane work-item has no id")
+    if not str(work_item.get("name") or work_item.get("title") or "").strip():
+        raise PlaneNormalizationError("Plane work-item has no title")
+    computed_key = f"{project['identifier'].strip()}-{sequence_id}"
+    legacy_key = work_item.get("identifier")
+    if legacy_key is not None and str(legacy_key).strip() and str(legacy_key).casefold() != computed_key.casefold():
+        raise PlaneNormalizationError("legacy identifier conflicts with project.identifier + sequence_id")
+    normalized = dict(work_item)
+    normalized.update({
+        "identifier": computed_key,
+        "description": html_to_markdown(work_item.get("description_html")),
+        "state": {**state, "group": state_group},
+        "raw_source": dict(work_item),
+        "_plane_normalization": "v2",
+        "_description_provenance": "description_html",
+    })
+    return normalized
+
+
+def is_unfinished_work_item(work_item: dict[str, Any]) -> bool:
+    """Return true only for the Plane state groups allowed into intake."""
+    state = work_item.get("state")
+    return isinstance(state, dict) and str(state.get("group", "")).casefold() in _UNFINISHED_STATE_GROUPS
 
 
 def resolve_api_key(api_key: str | None = None) -> str:
@@ -131,22 +242,12 @@ def fetch_issue_by_identifier(
     if not identifier:
         raise ValueError("identifier is required")
     key = resolve_api_key(api_key)
-    status, payload = _request(
-        "GET", f"/projects/{project_id}/issues/?search={urllib.parse.quote(identifier)}",
-        workspace=workspace, api_key=key,
-    )
-    issues = payload.get("results", []) if isinstance(payload, dict) else payload
-    if status != 200 or not isinstance(issues, list):
-        raise PlaneAPIError(f"search issues for {identifier} failed: HTTP {status} {payload}")
-    matches = [issue for issue in issues if isinstance(issue, dict) and str(
-        issue.get("identifier") or issue.get("issue_key") or issue.get("key") or ""
-    ).casefold() == identifier.casefold()]
+    matches = [item for item in list_work_items(
+        workspace=workspace, project_id=project_id, api_key=key
+    ) if item["identifier"].casefold() == identifier.casefold()]
     if len(matches) != 1:
-        raise PlaneAPIError(f"expected exactly one Plane issue for {identifier}, found {len(matches)}")
-    issue_id = matches[0].get("id")
-    if not issue_id:
-        raise PlaneAPIError(f"Plane issue {identifier} has no id")
-    return fetch_issue(str(issue_id), workspace=workspace, project_id=project_id, api_key=key)
+        raise PlaneAPIError(f"expected exactly one Plane work-item for {identifier}, found {len(matches)}")
+    return fetch_issue(str(matches[0]["id"]), workspace=workspace, project_id=project_id, api_key=key)
 
 
 def fetch_issue(
@@ -156,19 +257,47 @@ def fetch_issue(
     project_id: str = DEFAULT_PROJECT_ID,
     api_key: str | None = None,
 ) -> dict[str, Any]:
-    """Fetch a Plane issue, including its title, description, and state."""
+    """Fetch one expanded Plane v2 work-item through the primary read path."""
     if not issue_id:
         raise ValueError("issue_id is required")
     key = resolve_api_key(api_key)
     status, payload = _request(
         "GET",
-        f"/projects/{project_id}/issues/{issue_id}/",
+        f"/projects/{project_id}/work-items/{issue_id}/?expand=state,project",
         workspace=workspace,
         api_key=key,
     )
     if status != 200 or not isinstance(payload, dict):
         raise PlaneAPIError(f"fetch_issue {issue_id} failed: HTTP {status} {payload}")
-    return payload
+    try:
+        return normalize_work_item(payload)
+    except PlaneNormalizationError as exc:
+        raise PlaneAPIError(f"fetch_issue {issue_id} returned an unsafe v2 payload: {exc}") from exc
+
+
+def list_work_items(
+    *,
+    workspace: str = DEFAULT_WORKSPACE,
+    project_id: str = DEFAULT_PROJECT_ID,
+    api_key: str | None = None,
+) -> list[dict[str, Any]]:
+    """List expanded v2 work-items; callers own the state-group policy."""
+    key = resolve_api_key(api_key)
+    status, payload = _request(
+        "GET", f"/projects/{project_id}/work-items/?expand=state,project",
+        workspace=workspace, api_key=key,
+    )
+    items = payload.get("results", []) if isinstance(payload, dict) else payload
+    if status != 200 or not isinstance(items, list):
+        raise PlaneAPIError(f"list work-items failed: HTTP {status} {payload}")
+    normalized: list[dict[str, Any]] = []
+    for item in items:
+        try:
+            normalized.append(normalize_work_item(item))
+        except PlaneNormalizationError:
+            # Unsafe list items cannot be shown as dispatchable.
+            continue
+    return normalized
 
 
 def _ticket_context(issue: dict[str, Any]) -> dict[str, Any]:

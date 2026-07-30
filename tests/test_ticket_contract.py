@@ -65,6 +65,23 @@ def without_section(description: str, heading: str) -> str:
     return description[:start] + ("" if next_heading == -1 else description[next_heading + 1:])
 
 
+def valid_v2_issue(**overrides):
+    html = """<h2>Goal</h2><p>Make Plane intake deterministic before an Agent can run.</p>
+<h2>Scope</h2><ul><li>Map the ticket description into ticket-spec.json.</li></ul>
+<h2>Out-of-scope</h2><ul><li>Do not create a branch or pull request.</li></ul>
+<h2>Risk Tier</h2><p>R1</p>
+<h2>Acceptance Criteria</h2><ul><li>☐ AC-1: A complete Plane ticket produces a schema-valid ticket-spec.</li><li>☐ AC-2: Invalid tickets are blocked before Agent dispatch.</li></ul>
+<h2>Verification</h2><ul><li>AC-1: automated: <code>python3 -m pytest tests/test_ticket_contract.py -q</code></li><li>AC-2: inspection: <code>assert planner_executor_qa_calls == 0</code></li></ul>
+<h2>Repository</h2><p><code>zuohaisu/AI-Operations</code></p>
+<h2>Required Checks</h2><ul><li><code>python3 -m pytest tests/test_ticket_contract.py -q</code></li></ul>
+<h2>Constraints</h2><ul><li>max_fix_attempts: 2</li><li>allow_main_push: false</li></ul>"""
+    issue = {"id": "v2-issue", "identifier": None, "description": None, "name": "no identifier in title",
+             "description_html": html, "description_stripped": "flat preview", "sequence_id": 18,
+             "project": {"identifier": "AIO"}, "state": {"id": "started-id", "group": "started"}}
+    issue.update(overrides)
+    return issue
+
+
 def test_complete_r1_ticket_maps_to_schema_valid_traceable_ticket_spec():
     result = ticket_contract.preflight_plane_issue(valid_issue())
 
@@ -161,6 +178,26 @@ def test_schema_subset_rejects_contract_that_allows_main_push():
 
     assert not valid
     assert any("allow_main_push" in error for error in errors)
+
+
+def test_v2_null_legacy_fields_preserve_html_structure_and_compute_issue_key():
+    result = ticket_contract.preflight_plane_issue(valid_v2_issue())
+
+    assert result["status"] == "READY"
+    spec = result["ticket_spec"]
+    assert spec["issue_key"] == "AIO-18"
+    assert spec["provenance"]["goal"] == "description_html#Goal"
+    assert spec["source_issue"]["raw_source"]["description"] is None
+    assert "flat preview" not in spec["source_issue"]["description"]
+
+
+@pytest.mark.parametrize("overrides", [
+    {"project": {}}, {"sequence_id": None}, {"state": {"id": "x", "group": "unknown"}}, {"identifier": "AIO-99"},
+])
+def test_v2_missing_semantics_blocks_before_agent_dispatch(overrides):
+    result = ticket_contract.preflight_plane_issue(valid_v2_issue(**overrides))
+    assert result["status"] == "BLOCKED_NEEDS_HUMAN"
+    assert result["ticket_spec"] is None
 
 
 def test_connector_backed_preflight_reuses_aio8_fetch_issue_without_reimplementing_http():

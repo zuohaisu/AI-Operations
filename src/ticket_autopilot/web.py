@@ -22,6 +22,11 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.error import URLError
+from urllib.parse import urlparse
+
+from ticket_autopilot.connectors import plane
+from ticket_autopilot.services.prompt_resolver import PromptPreparationError, PromptResolver
+from ticket_autopilot.services.ticket_contract import preflight_plane_issue, readiness_errors
 from urllib.request import Request, urlopen
 import webbrowser
 
@@ -405,6 +410,85 @@ def _process_command(pid: int) -> str | None:
         return None
 
 
+class TicketBoard:
+    """Thin Web boundary over the existing Plane connector and ticket contract."""
+
+    def __init__(self, settings: LocalConfig, *, repository: str | Path | None = None, planner: Callable[..., dict[str, str]] | None = None):
+        self.settings = settings
+        self.repository = Path(repository or Path.cwd()).resolve()
+        self.planner = planner
+
+    def list(self) -> dict[str, Any]:
+        items = plane.list_work_items(**self._plane_options())
+        return {"tickets": [self._summary(item) for item in items if plane.is_unfinished_work_item(item)]}
+
+    def detail(self, issue_id: str) -> dict[str, Any]:
+        item = plane.fetch_issue(issue_id, **self._plane_options())
+        return self._detail(item)
+
+    def prepare(self, issue_id: str) -> dict[str, Any]:
+        item = plane.fetch_issue(issue_id, **self._plane_options())
+        detail = self._detail(item)
+        if not detail["eligible"]:
+            return {"status": "BLOCKED_REQUIREMENTS", "reason": detail["reason"], "developer_calls": 0, "qa_calls": 0}
+        resolver = PromptResolver(self.repository)
+        try:
+            prepared = resolver.prepare(
+                issue_key=item["identifier"], ticket_spec=detail["ticket_spec"],
+                source_issue=item, planner=self.planner,
+            )
+        except PromptPreparationError as exc:
+            return {"status": "BLOCKED_REQUIREMENTS", "reason": str(exc), "developer_calls": 0, "qa_calls": 0}
+        return {**prepared, "developer_calls": 0, "qa_calls": 0}
+
+    def _summary(self, item: dict[str, Any]) -> dict[str, Any]:
+        detail = self._detail(item)
+        return {key: detail[key] for key in (
+            "id", "identifier", "title", "state", "priority", "risk", "eligible", "reason", "prompt_availability",
+        )}
+
+    def _detail(self, item: dict[str, Any]) -> dict[str, Any]:
+        preflight = preflight_plane_issue(item)
+        readiness = readiness_errors(item) if preflight["status"] == "READY" else []
+        unfinished = plane.is_unfinished_work_item(item)
+        project_matches = self._project_matches(item)
+        eligible = unfinished and project_matches and preflight["status"] == "READY" and not readiness
+        reason = None
+        if not unfinished:
+            reason = f"Plane state group {item['state']['group']} is not eligible for a Run"
+        elif not project_matches:
+            reason = "expanded Plane project does not match the configured project"
+        elif readiness:
+            reason = "; ".join(readiness)
+        elif not eligible:
+            reason = "; ".join(error["message"] for error in preflight["errors"])
+        resolver = PromptResolver(self.repository)
+        return {
+            "id": str(item["id"]), "identifier": item["identifier"],
+            "title": item.get("name") or item.get("title"), "state": item["state"],
+            "priority": item.get("priority"),
+            "risk": (preflight.get("ticket_spec") or {}).get("risk_tier"),
+            "eligible": eligible, "reason": reason,
+            "prompt_availability": resolver.availability(item["identifier"]),
+            "ticket_spec": preflight.get("ticket_spec"),
+        }
+
+    def _project_matches(self, item: dict[str, Any]) -> bool:
+        # The endpoint is already scoped to the configured project.  When Plane
+        # expands project.id as well, retain that second deterministic check.
+        expected = self.settings.load(redacted=False)["plane"]["project"]
+        project = item.get("project")
+        actual = project.get("id") if isinstance(project, dict) else None
+        return actual is None or str(actual) == expected
+
+    def _plane_options(self) -> dict[str, str]:
+        config = self.settings.load(redacted=False)["plane"]
+        required = ("workspace", "project", "api_key")
+        if any(not config.get(key) for key in required):
+            raise plane.PlaneAPIError("Plane workspace, project, and API key must be configured locally")
+        return {"workspace": config["workspace"], "project_id": config["project"], "api_key": config["api_key"]}
+
+
 class SettingsHandler(BaseHTTPRequestHandler):
     """Small same-origin JSON API and static settings page."""
 
@@ -418,22 +502,48 @@ class SettingsHandler(BaseHTTPRequestHandler):
     def service_id(self) -> str:
         return self.server.service_id  # type: ignore[attr-defined]
 
+    @property
+    def tickets(self) -> TicketBoard:
+        board = getattr(self.server, "ticket_board", None)
+        if board is None:
+            board = TicketBoard(self.settings, repository=getattr(self.server, "project_root", Path.cwd()),
+                                planner=getattr(self.server, "planner_adapter", None))
+            self.server.ticket_board = board  # type: ignore[attr-defined]
+        return board
+
     def do_GET(self) -> None:  # noqa: N802
-        if self.path == "/api/health":
-            self._json(HTTPStatus.OK, {"status": "ok", "service_id": self.service_id})
-        elif self.path == "/api/config":
-            self._json(HTTPStatus.OK, self.settings.load(redacted=True))
-        elif self.path in ("/", "/index.html"):
-            self._static("index.html", "text/html; charset=utf-8")
-        elif self.path == "/app.js":
-            self._static("app.js", "application/javascript; charset=utf-8")
-        elif self.path == "/styles.css":
-            self._static("styles.css", "text/css; charset=utf-8")
-        else:
-            self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        path = urlparse(self.path).path
+        try:
+            if path == "/api/health":
+                self._json(HTTPStatus.OK, {"status": "ok", "service_id": self.service_id})
+            elif path == "/api/config":
+                self._json(HTTPStatus.OK, self.settings.load(redacted=True))
+            elif path == "/api/tickets":
+                self._json(HTTPStatus.OK, self.tickets.list())
+            elif path.startswith("/api/tickets/"):
+                issue_id = path.removeprefix("/api/tickets/")
+                self._json(HTTPStatus.OK, self.tickets.detail(issue_id))
+            elif path in ("/", "/index.html"):
+                self._static("index.html", "text/html; charset=utf-8")
+            elif path == "/app.js":
+                self._static("app.js", "application/javascript; charset=utf-8")
+            elif path == "/styles.css":
+                self._static("styles.css", "text/css; charset=utf-8")
+            else:
+                self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        except (plane.PlaneAPIError, ValueError) as exc:
+            self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/api/config":
+        path = urlparse(self.path).path
+        if path.startswith("/api/tickets/") and path.endswith("/prepare"):
+            issue_id = path.removeprefix("/api/tickets/").removesuffix("/prepare").rstrip("/")
+            try:
+                self._json(HTTPStatus.OK, self.tickets.prepare(issue_id))
+            except (plane.PlaneAPIError, ValueError) as exc:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc), "developer_calls": 0, "qa_calls": 0})
+            return
+        if path != "/api/config":
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         try:
@@ -480,6 +590,7 @@ def serve(*, port: int, service_id: str, home: str | Path | None = None) -> None
     server = ThreadingHTTPServer((HOST, port), SettingsHandler)
     server.settings = LocalConfig(home)  # type: ignore[attr-defined]
     server.service_id = service_id  # type: ignore[attr-defined]
+    server.project_root = Path(os.environ.get("TICKET_AUTOPILOT_PROJECT_ROOT") or Path.cwd()).resolve()  # type: ignore[attr-defined]
     server.serve_forever(poll_interval=0.2)
 
 

@@ -3,31 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ticket Autopilot settings</title>
+  <title>Ticket Autopilot</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <main>
-    <h1>Ticket Autopilot</h1>
-    <p class="lede">Local settings. Ticket execution is not enabled in this screen.</p>
-    <form id="settings">
-      <fieldset><legend>Plane</legend>
-        <label>Workspace <input name="workspace" autocomplete="off"></label>
-        <label>Project <input name="project" autocomplete="off"></label>
-        <label>API key <input name="api_key" type="password" autocomplete="off" placeholder="Not configured"></label>
-      </fieldset>
-      <fieldset><legend>Local repository</legend>
-        <label>Repository <input name="repository" autocomplete="off"></label>
-      </fieldset>
-      <fieldset><legend>Agent CLIs</legend>
-        <label>Planner <input name="planner" autocomplete="off" placeholder="codex"></label>
-        <label>Developer <input name="developer" autocomplete="off" placeholder="claude"></label>
-        <label>QA <input name="qa" autocomplete="off" placeholder="qodercli"></label>
-      </fieldset>
-      <button type="submit">Save settings</button>
-      <output id="result" aria-live="polite"></output>
-    </form>
-  </main>
-  <script src="/app.js"></script>
-</body>
-</html>
+    <header><h1>Ticket Autopilot</h1><p class="lede">Prepare one eligible Plane ticket. Developer and QA are not started here.</p></header>
+    <section aria-labelledby="tickets-heading"><div class="section-head"><h2 id="tickets-heading">Open Plane tickets</h2><button id="refresh" type="button">Refresh</button></div>
+      <output id="tickets-status" aria-live="polite"></output><div id="tickets" class="ticket-list"></div>
+    </section>
+    <section id="detail" hidden aria-labelledby="detail-heading"><h2 id="detail-heading">Ticket preparation</h2><div id="detail-body"></div><button id="prepare" type="button">Prepare Run prompts</button><output id="prepare-result" aria-live="polite"></output></section>
+    <details><summary>Local settings</summary><form id="settings">
+      <fieldset><legend>Plane</legend><label>Workspace <input name="workspace" autocomplete="off"></label><label>Project <input name="project" autocomplete="off"></label><label>API key <input name="api_key" type="password" autocomplete="off" placeholder="Not configured"></label></fieldset>
+      <fieldset><legend>Local repository</legend><label>Repository <input name="repository" autocomplete="off"></label></fieldset>
+      <fieldset><legend>Agent CLIs</legend><label>Planner <input name="planner" autocomplete="off" placeholder="codex"></label><label>Developer <input name="developer" autocomplete="off" placeholder="claude"></label><label>QA <input name="qa" autocomplete="off" placeholder="qodercli"></label></fieldset>
+      <button type="submit">Save settings</button><output id="settings-result" aria-live="polite"></output>
+    </form></details>
+  </main><script src="/app.js"></script>
+</body></html>
