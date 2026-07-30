@@ -7,8 +7,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from ticket_autopilot.services.run_manager import RunManager
+from ticket_autopilot.services.git_worktree import GitWorktreeError
 
 
 def ticket_spec() -> dict:
@@ -42,6 +44,17 @@ def ticket_spec() -> dict:
 
 
 class RunWorktreeTests(unittest.TestCase):
+    @staticmethod
+    def authorization(action: str) -> dict:
+        return {
+            "actor": "repo-owner",
+            "actor_type": "repository_owner",
+            "action": action,
+            "approved": True,
+            "approved_at": "2026-07-31T00:00:00+08:00",
+            "reason": "explicit owner action",
+        }
+
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.repo = Path(self.temp_dir.name)
@@ -127,6 +140,32 @@ class RunWorktreeTests(unittest.TestCase):
         unknown = self.manager.cleanup("aio-11-unknown")
         self.assertEqual(unknown["status"], "BLOCKED")
         self.assertTrue(Path(record.worktree).is_dir())
+
+    def test_feature_branch_push_requires_owner_authorization_and_never_pushes_main(self):
+        record = self.manager.create_run(ticket_spec())
+        with self.assertRaisesRegex(ValueError, "repository-owner authorization"):
+            self.manager.git.push_feature_branch(record.branch)
+
+        with self.assertRaisesRegex(GitWorktreeError, "protected"):
+            self.manager.git.push_feature_branch(
+                "main",
+                authorization=self.authorization("push_feature_branch"),
+            )
+
+        with mock.patch.object(self.manager.git, "_run", return_value="") as run:
+            result = self.manager.git.push_feature_branch(
+                record.branch,
+                authorization=self.authorization("push_feature_branch"),
+            )
+
+        self.assertEqual(result["status"], "PUSHED")
+        self.assertEqual(result["branch"], record.branch)
+        run.assert_called_once_with(
+            "push",
+            "--set-upstream",
+            "origin",
+            f"refs/heads/{record.branch}:refs/heads/{record.branch}",
+        )
 
 
 if __name__ == "__main__":

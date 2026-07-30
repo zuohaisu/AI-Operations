@@ -47,6 +47,21 @@ Use this order and do not skip directly to a custom platform:
 Every custom component must therefore name the existing capability that was checked
 and the gap it fills.
 
+## Actor-Aware Delivery Authority
+
+Safety restrictions apply to autonomous Agents, not to the repository owner.
+Developer and QA Agents may never push a protected branch, authorize their own
+override, or merge a Pull Request. The Controller may push an isolated feature
+branch or merge only when the repository owner explicitly authorizes that exact
+action and the audit record includes actor, action, timestamp, and reason.
+
+`QA_PENDING` and `HUMAN_VISUAL_REVIEW_PENDING` are evidence states, not
+`BLOCKED_REQUIREMENTS`; they may accompany a Draft PR. A user override must
+retain the original pending/fail evidence and must not be reported as PASS.
+Mixed commits or files are `DIFF_SPLIT_REQUIRED` and should be mechanically
+isolated. Use `TECHNICAL_BLOCKED` only for an operation that actually fails
+because of credentials, network, conflict, or remote rejection.
+
 ## Current Focus
 
 The Start Prompt research and comparison tooling is a parked supporting track. Do not

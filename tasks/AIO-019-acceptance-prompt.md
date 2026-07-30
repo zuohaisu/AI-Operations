@@ -10,7 +10,7 @@
 ## 验收准备
 - 重跑 AIO-17/18 readiness commands；状态标签不算依赖证据。
 - 读原票、Dev Prompt、Controller/pipeline/verifier/Run Manager 和完整 diff。
-- 记录 base/head、ticket-owned Worktree、pre-existing dirty paths；他票污染无法分离时 `BLOCKED_ATTRIBUTION`。
+- 记录 base/head、ticket-owned Worktree、pre-existing dirty paths；可机械分离的他票提交/文件应报告 `DIFF_SPLIT_REQUIRED` 和精确拆分方案，只有归属事实无法确定时才 `BLOCKED_ATTRIBUTION`。
 - 读取 repository invariants；不得建议把强制随附测试/契约更新推迟到另一票。
 
 ## AC 证据矩阵
@@ -32,7 +32,7 @@ python3 -m pytest -q
 不能只验证函数被调用；必须核对实参语义、顺序、call count、changed-file 集合和最终状态。所有外部 I/O 必须 fake/mock。
 
 ## Scope 与权限
-- 禁止 Push/PR/Merge/deploy/Plane write、并行队列、任意 Resume、QA 写文件、Developer 自判 PASS。
+- AIO-19 的 Developer/QA Agent 禁止自主 Push/PR/Merge/deploy/Plane write、并行队列、任意 Resume、QA 写文件、Developer 自判 PASS；不得把这条 ticket scope 解释成 Repo Owner 无权显式控制 delivery action。
 - QA finding 只描述观察事实与最小实现修复，不得发明违反 main-green/commit-after-pass 的流程 remedy。
 
 ## Verdict
@@ -51,4 +51,3 @@ recommended_next_state: PASS | FIXING | BLOCKED_NEEDS_HUMAN
 ```
 
 全部 AC PASS、三条命令为 0、无 blocker/major、无归因或权限违规时才 PASS。
-

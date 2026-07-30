@@ -65,7 +65,7 @@
 - 若 Ticket 引用上游 API，Prompt 必须保留 observed fields、semantic assertion 和 checked-at；不能只写“依赖票已完成”。
 - Planner 失败、超时、输出缺角色或不满足 schema 时进入 `HARD_BREAK_PLANNER`；Developer 调用次数必须为 0，页面显示可操作原因。
 - 页面明确显示每份 Prompt 的来源和准备状态；本票只做到“Run ready”，不启动 Developer/QA。
-- Ticket 列表、详情、Prompt source 和 Planner Hard Break 页面需要浏览器/视觉证据或明确 human visual gate；后端 API 测试不能单独证明页面可用。
+- Ticket 列表、详情、Prompt source 和 Planner Hard Break 页面需要浏览器/视觉证据或明确 human visual gate；后端 API 测试不能单独证明页面可用。缺视觉结论时状态为 `HUMAN_VISUAL_REVIEW_PENDING`，可创建带 warning 的 Draft PR，但不得宣称 UI PASS。
 
 ## Out of scope
 - 不执行 Developer、QA、Fix Loop、Git Commit，不创建 Worktree/PR，不写回 Plane 状态。
@@ -112,7 +112,7 @@ python3 -m pytest -q
 3. 为 Run 准备阶段定义稳定的 artifact/metadata 结构，至少记录 issue key、两份 Prompt 路径、各自 source、Planner outcome 和 hard-break reason。
 4. Planner 必须是可注入 adapter；测试使用 fake，不依赖本机 Agent CLI，不访问网络。
 5. 在测试前后哈希/列出 `tasks/`，证明 resolver 和 Planner 不会修改规范 Prompt 文件。
-6. 改动文件不超过 14，预期集中在既有 Web 层、Prompt resolver、静态页面和两份测试；Developer 不 Push、Merge、部署或改 Plane。
+6. 改动文件不超过 14，预期集中在既有 Web 层、Prompt resolver、静态页面和两份测试；Developer Agent 不自主 Push、Merge、部署或改 Plane。这是 Agent 权限边界，不得用于阻止 Repo Owner 显式要求 Controller push feature branch、创建 Draft PR、记录 override 或 merge。
 
 ## 完成定义、风险与回滚
 - 六条 AC 均有自动化证据，相关回归全绿，独立 QA PASS。

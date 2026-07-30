@@ -1126,8 +1126,10 @@ Human decision is required before the ticket can continue.
 * Main Branch 必须启用 Branch Protection 或 Ruleset。
 * Agent 不得直接 Push Main。
 * Agent 不得 Merge Pull Request。
-* Pull Request 必须经过人工 Review。
+* Pull Request 必须经过 Repo Owner Review 或记录明确的 Owner override。
 * CI 和 AI QA 应作为 Required Checks。
+* Repo Owner 可以显式授权 Controller push Feature Branch 或 Merge；授权必须包含 actor、action、approved_at 和 reason，且 Agent 不得自我授权。
+* QA/视觉 pending 允许创建 Draft PR，但原始 pending/fail 证据必须保留，不得改写为 PASS。
 
 ### 18.2 Developer permissions
 
@@ -1298,7 +1300,10 @@ A Ticket missing any required Ticket Contract field is rejected before Developer
 
 ### AC-V03
 
-Developer Agent cannot directly push to Main or merge a Pull Request.
+Developer Agent cannot directly push to Main, authorize a remote action, or
+merge a Pull Request. The repository owner can explicitly authorize the
+Controller to push one Feature Branch or merge one Pull Request, with an audit
+record retained.
 
 ### AC-V04
 

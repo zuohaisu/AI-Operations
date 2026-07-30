@@ -32,7 +32,7 @@ exercise the existing Engine control flow without contacting Plane or an LLM.
 | 3. Execute / development | `executor` agent and `execute` node in `src/ticket_autopilot/workflows/ticket-pipeline.yaml`; `src/ticket_autopilot/engine/drivers.py::cli_call` invokes `claude`. Its actual configuration is `cwd: ./sandbox`, `permission_mode: read-only`, and tools `Read`, `Glob`, `Grep`. `ticket-pipeline-hermes.yaml` is a Hermes variant whose sandbox is caller-enforced. Verify the CLI guardrail with `python3 -m unittest discover -s src/ticket_autopilot/engine/tests -v`. | `cli_call` resolves the cwd inside the allowed sandbox root, raises `SecurityError` before spawning a CLI outside it, passes `--permission-mode read-only`, and passes `--allowedTools`. The standard workflow therefore cannot write implementation changes. | The current evidence is the enforced sandbox, read-only mode, and tool allowlist, including the `SecurityError` test. This is a safety gate, **not** evidence of completed development; writable worktree/branch execution is still a future thin Connector. |
 | 4. Deterministic verification and independent QA | `verifier` agent and `verify` node in both workflow YAML files; standard driver is `llm` with `expect: json`. Inspect with `grep -n 'id: verify' src/ticket_autopilot/workflows/ticket-pipeline*.yaml; grep -n 'expect: json' src/ticket_autopilot/workflows/ticket-pipeline*.yaml; grep -n 'decision.*accept' src/ticket_autopilot/workflows/ticket-pipeline*.yaml`. | The verifier receives the captured plan and execute result and must return JSON with `decision` `accept` or `reject`; the Engine evaluates that decision on the outgoing edges. | Only `verdict.decision == accept` permits the current `close` edge. **Current status: incomplete**—this is an LLM verdict, not deterministic command evidence or independent Codex QA. The independent-QA upgrade belongs to the planned AIO-7 work and must not be represented as present. |
 | 5. Bounded fix loop | The `verify` → `execute` edge in both YAML workflows: `kind: loop`, `when: "nodes.verify.decision == 'reject'"`, and `max_retries: ${vars.max_retries}`; `vars.max_retries` is currently `5`. Inspect with `grep -n 'max_retries' src/ticket_autopilot/workflows/ticket-pipeline*.yaml; grep -n 'kind: loop' src/ticket_autopilot/workflows/ticket-pipeline*.yaml; grep -n 'nodes.verify.decision' src/ticket_autopilot/workflows/ticket-pipeline*.yaml`. | `Engine._fire_edges` increments the loop retry count and marks `execute` stale for another run only while below the cap. On exhaustion it stops firing that edge; it does not fabricate an accept or close result. | A reject can re-run execute no more than the configured cap. Exhaustion leaves `close` incomplete and is not success; current code does not yet write a `BLOCKED` ticket result. |
-| 6. Pull Request and CI evidence | **No current GitHub Connector or workflow node exists.** The intended reuse path is native GitHub Actions plus `gh` through a future thin GitHub Connector; `research/capability-audit.md` records the local `gh` capability audit. Before relying on this stage, inspect the absence with `find src/ticket_autopilot/connectors -maxdepth 1 -type f -print` and inspect available CLI support with `gh pr create --help` and `gh run list --help`. | This repository's Engine does not create branches, commits, pushes, pull requests, or CI evidence. This document only reserves the integration point; it does not implement it. | A PR exists and its required CI is passing. **Current status: BLOCKED** until the future Connector collects those facts. Never substitute local self-reporting for PR/CI evidence. |
+| 6. Pull Request and CI evidence | `src/ticket_autopilot/connectors/github.py` creates Draft PRs and can merge only with a validated repository-owner authorization record. `GitWorktreeService.push_feature_branch` applies the same authorization boundary to a non-protected branch. `services/delivery_policy.py` distinguishes pending quality evidence, Diff splitting, owner override, and technical failure. | Pending QA or visual review may create a Draft PR with warnings. A protected-branch push is always rejected. Feature-branch push and merge require separate exact owner authorizations; an Agent cannot authorize either action. A mixed Diff becomes `DIFF_SPLIT_REQUIRED`, not `BLOCKED_REQUIREMENTS`, and must be mechanically isolated before PR creation. | Draft evidence = isolated head/base and PR URL. Review evidence = QA/visual statuses without fabricated PASS. Merge evidence = explicit owner authorization plus GitHub result. Only an actual credential/network/conflict/remote failure is `TECHNICAL_BLOCKED`. |
 | 7. Ticket status and result | `closer` agent and `close` node use `driver: script`, `entry: close_ticket`; `src/ticket_autopilot/engine/handlers/close_ticket.py::close_ticket` calls `plane_client.add_comment` then `plane_client.set_state(ticket_id, "done")`. Inspect with `grep -nE 'add_comment|set_state.*done' src/ticket_autopilot/engine/handlers/close_ticket.py`. | The `verify` accept edge invokes the script handler, which posts the plan/result comment and attempts to set the Plane ticket to done. It is the only current Engine node that touches Plane. | Plane comment and state-update calls complete successfully. **Current status: not safe for AIO closure:** the reused client has a hard-coded project ID identified in `research/capability-audit.md`; a parameterized Connector and preceding PR/CI/independent-QA evidence are required before this may close a real AIO ticket. |
 
 ## Mandatory goal check and retrospective verification
@@ -64,12 +64,31 @@ record the artifact path and command result, confirm that the named stage is
 one of the seven stages above, and confirm that the cited evidence actually
 exists. This is an audit convention, not a CI gate.
 
+## Actor-aware authority and delivery states
+
+The repository owner is the human gate, not a subject blocked by it:
+
+| Actor / state | Feature-branch push | Draft PR | Merge |
+| --- | --- | --- | --- |
+| Developer or QA Agent acting autonomously | no | no | no |
+| Controller following the closed loop | only with explicit owner authorization | yes when the Diff is isolated; QA/visual pending remain warnings | no |
+| Repository owner explicit action | yes | yes | yes, with a separate auditable merge authorization |
+
+Canonical delivery states are `QA_PENDING`,
+`HUMAN_VISUAL_REVIEW_PENDING`, `READY_FOR_REVIEW`,
+`DIFF_SPLIT_REQUIRED`, `USER_OVERRIDE_APPROVED`,
+`MERGE_AUTHORIZED_BY_USER`, and `TECHNICAL_BLOCKED`. An override records the
+owner, action, time, and reason; it never rewrites deterministic, QA, or visual
+evidence to PASS. A branch-protection API `403` is not by itself proof that Git
+push credentials will fail; classify a technical blocker from the operation
+that actually failed.
+
 ## Explicit exclusions
 
 This definition describes the current v0.1 boundary and does **not** add or
-claim: resume, webhook triggers, parallel runs, automatic merge, automatic
+claim: resume, webhook triggers, parallel runs, Agent-authorized merge, automatic
 deploy, automatic migration, or automatic selection of the next ticket. PRs
-remain subject to human review and merge. Credentials, if a future Connector
+remain subject to repository-owner review and explicit merge authorization. Credentials, if a Connector
 uses them, are read from environment variables, Keychain, or existing `gh`
 authentication; they are never written into this workflow definition.
 

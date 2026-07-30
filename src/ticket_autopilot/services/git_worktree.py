@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 
+from ticket_autopilot.services.delivery_policy import require_user_authorization
+
 
 PROTECTED_BRANCHES = frozenset({"main", "master"})
 
@@ -94,3 +96,29 @@ class GitWorktreeService:
         if is_protected_branch(branch):
             raise GitWorktreeError(f"refusing to delete a protected branch: {branch}")
         self._run("branch", "-D", branch)
+
+    def push_feature_branch(
+        self,
+        branch: str,
+        *,
+        remote: str = "origin",
+        authorization: dict | None = None,
+    ) -> dict:
+        """Push one existing feature branch after explicit owner authorization."""
+        audit = require_user_authorization(
+            authorization, action="push_feature_branch"
+        )
+        if not remote or remote.startswith("-"):
+            raise GitWorktreeError("remote must be a named Git remote")
+        if not branch or is_protected_branch(branch):
+            raise GitWorktreeError("refusing to push a protected or empty branch")
+        if not self.branch_exists(branch):
+            raise GitWorktreeError(f"local feature branch does not exist: {branch}")
+        destination = f"refs/heads/{branch}:refs/heads/{branch}"
+        self._run("push", "--set-upstream", remote, destination)
+        return {
+            "status": "PUSHED",
+            "remote": remote,
+            "branch": branch,
+            "authorization": audit,
+        }

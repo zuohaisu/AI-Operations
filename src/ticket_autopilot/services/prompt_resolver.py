@@ -13,6 +13,8 @@ import re
 import secrets
 from typing import Any, Callable
 
+from ticket_autopilot.services.delivery_policy import HUMAN_VISUAL_REVIEW_PENDING
+
 
 _ISSUE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9_]*)-([1-9][0-9]*)$")
 _ROLES = ("dev", "acceptance")
@@ -93,7 +95,15 @@ class PromptResolver:
         metadata: dict[str, Any] = {
             "schema_version": "1.0", "issue_key": issue_key, "status": "PREPARING",
             "planner_outcome": "not_needed" if not missing else "pending", "hard_break_reason": None,
-            "visual_evidence": {"status": "HUMAN_GATE_REQUIRED", "reason": "review ticket list, detail, Prompt sources, and Planner hard break in a browser"},
+            "visual_evidence": {
+                "status": HUMAN_VISUAL_REVIEW_PENDING,
+                "reason": "review ticket list, detail, Prompt sources, and Planner hard break in a browser",
+                "draft_pr_allowed": True,
+                "available_user_actions": [
+                    "record_human_visual_pass",
+                    "override_gate",
+                ],
+            },
             "prompts": {},
         }
         self._write_json(artifact_dir / "prompt-metadata.json", metadata)

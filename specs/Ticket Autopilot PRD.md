@@ -23,7 +23,7 @@
 | Plan 角色 | 无显式 | Codex CLI（本机无 WorkBuddy CLI 二进制） |
 | 编排内核 | 单一 Controller 状态机 | **声明式 Engine**：YAML→DAG，Plan→Execute→Verify→Close，Verify 拒绝时自动重跑 Execute（默认 `max_retries=5`） |
 | 沙箱/护栏 | 文档描述，未强制 | **AIO-9 落地**：cwd 沙箱 + 只读强制 + 工具白名单，spawn 前拦截 |
-| 连接器 | Linear/GitHub/Claude/Codex 适配器 | **AIO-8 落地**：`connectors/plane.py`（取票/关单）、`connectors/github.py`（仅建草稿 PR，永不自动 merge）、`connectors/qa.py`（只读 verdict 门禁） |
+| 连接器 | Linear/GitHub/Claude/Codex 适配器 | **当前落地**：`connectors/plane.py`（取票/关单）、`connectors/github.py`（建草稿 PR；仅凭 repo-owner 显式授权 merge）、`connectors/qa.py`（只读 verdict 门禁） |
 
 本 PRD 以**当前实际产品**为准。`v0.1 Specification.md` 中的状态机、契约字段、CLI 命名等仍具参考价值，但凡与本 PRD 冲突，以本 PRD 为准。建议后续将旧规范归档或改写为「历史设计记录」。
 
@@ -72,7 +72,7 @@
 **用户目标**
 - G1：发起一张低风险工单后，人类**零 Prompt 复制**、零手工串联即可拿到 review-ready PR 或明确的 Blocked 结论。
 - G2：任何「完成」状态都**附带确定性证据**（Commit / Diff / 测试 Exit Code / QA Verdict），杜绝伪成功。
-- G3：Agent 在沙箱内运行，**永远不能**直推 main、不能碰生产、不能自动 merge。
+- G3：Agent 在沙箱内运行，**永远不能**直推 main、不能碰生产、不能自我授权 merge；Repo Owner 保留显式 push/PR/override/merge 决策权。
 
 **业务/个人目标**
 - G4：工单→review-ready PR 的**中位耗时**较手工流程下降 ≥ 50%。
@@ -86,7 +86,7 @@
 | # | 非目标 | 为什么 out-of-scope |
 | --- | --- | --- |
 | NG1 | 自建 Web UI / 控制台（v0.1） | 非技术用户的真阻塞是凭证/本地 Python/git/读 YAML，而非「命令行」本身；AGENTS.md 红线 = 复用优先、不预造平台。真要做也从**只读状态看板**起步。 |
-| NG2 | 自动 Merge / 自动生产部署 / 自动迁移 | 安全边界铁律：人工 Review 是不可逾越的闸门。 |
+| NG2 | Agent 自主 Merge / 自动生产部署 / 自动迁移 | 安全边界约束自动化主体；Repo Owner 的显式 merge 授权不是自动 Merge。 |
 | NG3 | 多工单队列 / 并行 Run / 持久服务 | 当前是个人单工单闭环；复杂度与收益不匹配。 |
 | NG4 | Run Resume（断点续跑） | 采用「一次性可丢弃 Run」模型：崩溃即 Abort→Cleanup→新建 Run 重头跑，接受额外 Token 成本换实现简单。 |
 | NG5 | 工单自动选型 / 自动写需求 | 工单由人类在 Plane 中创建与指派，Autopilot 不生产需求。 |
@@ -101,7 +101,7 @@
 - **Plan Agent（Codex CLI）**：读工单 → 产出实现方案。
 - **Execute Agent ×2（Claude Code + 「pi」）**：在沙箱内实现代码与测试、Commit。
 - **Verify Agent ×2（QoderWake CLI + Codex）**：只读审查 Diff / AC / 测试充分性 → 输出 `qa-verdict.json`。
-- **Repo Owner / 人类审查者**：Review PR、Merge。
+- **Repo Owner / 人类审查者**：Review PR；可显式接受视觉门禁、记录 override、授权 feature-branch push 或 Merge。
 - **Engine（控制器内核）**：驱动 DAG、执行重试循环、落快照、调用 Connector。
 
 ### 5.2 用户故事（按优先级）
@@ -109,7 +109,7 @@
 2. **作为 PM**，我希望任何「完成」状态都附带可核验证据，以便我不信任 Agent 自我报告也能放心 Review。（P0）
 3. **作为 Execute Agent**，我希望只在隔离沙箱内拿到明确的工单契约与修复清单，以便我不越界、不碰 main。（P0）
 4. **作为 Verify Agent**，我希望只读拿到原始契约 + 当前 Diff + 测试证据，以便独立给出 PASS/FAIL 判定。（P0）
-5. **作为 Repo Owner**，我希望 PR 永远是草稿且需人工 Review，以便最终控制权留在人类。（P0）
+5. **作为 Repo Owner**，我希望 Agent 永不自行 Merge，但我可以显式创建/推进 PR、接受或 override 门禁并决定 Merge 节奏，以便最终控制权真正留在我手中。（P0）
 6. **作为 PM**，我希望 QA 拒绝时只把原 Finding 交回 Execute 做窄修复，以便不扩大 Scope。（P1）
 7. **作为 PM**，我希望 Run 崩溃后可一键 Cleanup 且**不删除**已合并代码与生产数据，以便安全重试。（P1）
 8. **作为 PM**，我希望看板能只读展示每次 Run 的状态/证据，以便非技术干系人也能感知交付进度。（P2）
@@ -149,7 +149,7 @@ Local Engine (声明式 YAML→DAG + 重试循环 + 快照)
    ├── guardrails: cwd 沙箱 + 只读强制 + 工具白名单（spawn 前拦截）
    └── handlers/close_ticket: 唯一触碰 Plane 的节点
                                        ↓
-GitHub ──(connector/github: 仅建草稿 PR，永不自动 merge)──┐
+GitHub ──(connector/github: 草稿 PR + repo-owner 显式授权 merge)──┐
 QA ──────(connector/qa: 只读 → qa-verdict.json → 确定性校验门禁)─┘
 ```
 
@@ -159,7 +159,8 @@ QA ──────(connector/qa: 只读 → qa-verdict.json → 确定性校�
 | **Drivers** (`engine/drivers.py`) | llm/cli/hermes/script/mock 五类执行器 | AIO-6 已落地 |
 | **Guardrails** (`engine/guardrails.py`) | cwd 沙箱 + 只读 + 白名单 | AIO-9 已落地 |
 | **Connector: Plane** (`connectors/plane.py`) | 取票 / 建 workflow / 关单置 Done | AIO-8 已落地 |
-| **Connector: GitHub** (`connectors/github.py`) | 建草稿 PR（head 必为独立分支，永不 push main） | AIO-8 已落地 |
+| **Connector: GitHub** (`connectors/github.py`) | 建草稿 PR；凭 repo-owner 单次授权 merge（head 必为独立分支，永不 push main） | 已落地 actor-aware authorization |
+| **Delivery Policy** (`services/delivery_policy.py`) | 区分 pending warning、Diff split、owner override、merge authorization 与真实技术阻塞 | 已落地 |
 | **Connector: QA** (`connectors/qa.py` + `schemas/qa-verdict.schema.json`) | 只读 QA → 结构化 verdict → 确定性门禁 | AIO-7 已落地 |
 
 > **目录真相**：产品代码在 `src/ticket_autopilot/`；旧 `specs/Ticket Autopilot v0.1 Specification.md` 与 `tasks/ticket-autopilot-v0.1-tasklist.md`（T0–T19，描述旧 `ticket_controller` 包）**已 STALE，勿作架构依据**。
@@ -179,7 +180,7 @@ Engine **只做结构校验，不用 LLM 判断工单「写得好不好」**。
 
 ## 9. 护栏与安全边界
 
-- **Git 保护**：Agent 不得直推 main、不得 Merge、PR 必须人工 Review；CI 与 AI QA 作为 Required Checks。
+- **Git 保护**：Agent 不得直推 main、不得自行 Merge；Controller 只在 repo-owner 对具体 action 提供 actor/time/reason 后 push feature branch 或 merge。QA/视觉 pending 可建 Draft PR，但不得伪装为 PASS。
 - **沙箱**：所有 CLI 执行限定在 cwd 沙箱内，强制只读，工具白名单（AIO-9）。
 - **生产边界**：禁止 SSH 生产、读生产库、改生产数据、读生产 Secret、自动部署、不可逆迁移。
 - **凭证**：从环境变量 / OS Keychain / `gh` / Plane API Key 读取，**绝不写入配置文件或仓库**。
@@ -192,8 +193,8 @@ Engine **只做结构校验，不用 LLM 判断工单「写得好不好」**。
 - **R1 工单契约校验**：结构不合规的工单在调用任何 Agent 前被拒（AC：缺 Goal/AC/verification、Risk≠R0/R1、manual 验证 → BLOCKED_REQUIREMENTS）。
 - **R2 声明式 Engine 闭环**：YAML→DAG，驱动 Plan→Execute→Verify→Close；Verify 拒绝时自动重跑 Execute（AC：mock 跑通 plan→execute→verify(拒)→execute→verify(接受)→close）。
 - **R3 确定性验证**：建 Run/Worktree/Branch、跑 `required_checks`、读 Exit Code、校验 Commit/非空 Diff，全部由 Engine 完成，不信任 Agent 报告（AC：Developer 声称完成但无 Commit → BLOCKED_ENVIRONMENT，不建 PR）。
-- **R4 只读独立 QA 门禁**：QA 只产出 `qa-verdict.json`，过 Schema 且 =PASS 才放行（AC：畸形 JSON → Schema 失败 → BLOCKED_ENVIRONMENT；无独立 QA 能力 → 如实 BLOCKED_NEEDS_HUMAN，不冒充）。
-- **R5 仅建草稿 PR**：Connector 建 PR（head 独立分支），**永不**自动 merge / push main（AC：PR 存在且为草稿态，main 直推次数=0）。
+- **R4 只读独立 QA 证据**：QA 只产出 `qa-verdict.json`；畸形输出不得冒充 PASS。`QA_PENDING`/视觉 pending 可建 Draft PR，只有 PASS 或 repo-owner 的显式 override 才能越过质量 gate，且 override 不改写原 verdict。
+- **R5 Actor-aware Git 交付**：Connector 建 Draft PR（head 独立分支）；feature-branch push 与 merge 分别需要 repo-owner 单次授权。Agent 自授权、main push 和无审计 merge 次数必须为 0。
 - **R6 安全护栏**：cwd 沙箱 + 只读 + 白名单，spawn 前拦截（AC：越权命令被拦；forbidden path 命中 → BLOCKED_NEEDS_HUMAN）。
 - **R7 CLI 入口**：至少支持 `run` / `status` / `cancel` / `cleanup`，`cleanup` 删 Worktree 但保留日志与已合并代码（AC：见 §11 测试场景）。
 
@@ -277,7 +278,7 @@ Engine **只做结构校验，不用 LLM 判断工单「写得好不好」**。
 - 能从 Plane 读并校验工单；
 - 建可丢弃 Worktree/Branch；
 - 调 Execute 实现 + 确定性验证；
-- 建草稿 PR（绝不自动 merge）；
+- 建草稿 PR；Agent 不自动 merge，Repo Owner 可显式授权 Controller merge；
 - 调 Verify 独立 QA + 重试循环；
 - 同步 Plane 到 In Review / Blocked；
 - 用 ≥ 3 张真实低风险工单试运行，False PASS=0、越权=0、证据保留=100%。

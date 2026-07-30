@@ -32,7 +32,12 @@ def test_existing_prompts_bypass_planner_and_copy_bytes(tmp_path: Path):
 
     assert calls == []
     assert result["status"] == "READY"
-    assert result["visual_evidence"]["status"] == "HUMAN_GATE_REQUIRED"
+    assert result["visual_evidence"]["status"] == "HUMAN_VISUAL_REVIEW_PENDING"
+    assert result["visual_evidence"]["draft_pr_allowed"] is True
+    assert result["visual_evidence"]["available_user_actions"] == [
+        "record_human_visual_pass",
+        "override_gate",
+    ]
     assert result["prompts"]["dev"]["source"] == "existing_file"
     artifact = tmp_path / result["artifact_dir"]
     assert (artifact / "dev-prompt.md").read_bytes() == b"dev\n\xff"

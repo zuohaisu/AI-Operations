@@ -78,6 +78,7 @@ Explicit list that, when all true, triggers PR + status update:
 ### 9. Human touchpoints
 - **Trigger:** who moves to In Progress (the only required human action to start)
 - **Gate:** who reviews/merges the PR
+- **Owner authority:** which explicit user actions may create a Draft PR, accept a visual gate, override a quality gate, push a feature branch, or authorize merge
 - **Escalation:** after N failed fix loops, escalate to human with context
 
 ## Optional fields
@@ -132,6 +133,8 @@ Copy this block into a planning document or the Plane issue description. Replace
 ## 9. Human touchpoints
 - Trigger: <who or what moves the issue to In Progress>
 - Gate: <human reviewer/merger>
+- Owner authority: <allowed explicit actions; audit actor/action/time/reason>
+- Override policy: <which pending/failed gates may be overridden without fabricating PASS>
 - Escalation: <when to report BLOCKED_NEEDS_HUMAN>
 ```
 
@@ -179,6 +182,7 @@ Copy this block into a planning document or the Plane issue description. Replace
 **Human touchpoints**
 - Trigger: PM moves ticket to In Progress
 - Gate: PM reviews & merges PR
+- Owner authority: Repo Owner may create a Draft PR while QA is pending and may explicitly authorize merge; all overrides retain the original evidence
 - Escalation: after 3 failed fix loops, ping PM in chat
 
 **Agent budget:** 3

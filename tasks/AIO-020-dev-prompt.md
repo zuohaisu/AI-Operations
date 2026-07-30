@@ -27,6 +27,7 @@
 - 页面轮询 Run API，按真实事件显示 Planner/Developer/QA/Commit 顺序、Prompt 来源、findings、changed files、checks、branch/SHA。
 - 浏览器关闭/重开后可恢复当前或最终状态，后台 Run 不因页面关闭停止。
 - Hard Break 显示角色、阶段、轮次、原因、Worktree 和允许的人类动作。
+- Timeline 区分 Agent action 与 Repo Owner action；记录 owner 对视觉验收、override、feature-branch push、Draft PR 和 merge 的 actor/action/time/reason，不记录 Secret。用户 override 保留原始 pending/fail 事件，不制造 PASS。
 - `Retry current stage` 沿用同一 run_id、保留历史，并重新经过该阶段之后的必要门禁。
 - Stop 只终止本 Run owned process group，状态 `STOPPED`，保留 artifacts；提供安全的 Finder 入口。
 - 对已知 Secret 做递归脱敏，且写磁盘前完成。
@@ -34,13 +35,13 @@
 ## Out of scope
 - 不实现 WebSocket/SSE、数据库、任意节点 Resume、在线代码编辑器、通用 workflow designer。
 - 不实现远程访问、多用户权限、Tailscale/Cloudflare、移动端或通知系统。
-- 不自动修复 Hard Break，不允许跳过失败阶段继续。
+- Agent 不自动修复 Hard Break、不自我授权跳过失败阶段；Repo Owner 显式 override 是独立、可审计的人类动作，不得被前端伪装成阶段 PASS。
 - 不改 `.github/workflows/**`，不保存真实 Secret；改动文件不超过 16。
 
 ## 验收标准
 - AC-1：经过 Planner、Developer、两次 QA 和 Commit 的 Run，Timeline 顺序/round/Prompt source/findings/changed files/SHA 与 artifacts 一致。
 - AC-2：关闭再打开浏览器，同一 run_id 状态完整恢复，后台 Run 未停止。
-- AC-3：Hard Break 页面显示角色、阶段、轮次、原因和 Worktree，且不显示为普通 FAIL/PASS。
+- AC-3：Hard Break 页面显示角色、阶段、轮次、原因和 Worktree，且不显示为普通 FAIL/PASS；人类 visual accept/override 与 Agent action 明确区分并保留原始 gate 状态。
 - AC-4：Retry current stage 沿用 run_id、保留历史并重新经过后续门禁。
 - AC-5：Stop 只终止 owned process group，状态 STOPPED，artifacts 保留。
 - AC-6：配置 Secret 在 API/页面/DOM/日志/磁盘事件中均不可见。
@@ -60,4 +61,3 @@ python3 -m pytest -q
 4. 输出 changed files、dirty baseline、事件样例、测试 exit code、视觉证据状态和回滚方式。
 - 回滚：`git revert` Timeline/control API/UI；保留 append-only artifacts。
 - Escalation：进程归属、重试起点、事件真实性或 Secret 安全无法确认时 `BLOCKED_NEEDS_HUMAN`。
-

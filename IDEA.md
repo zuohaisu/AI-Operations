@@ -8,7 +8,22 @@ software delivery.
 For one structured ticket, the system should move from requirements through
 development, deterministic verification, independent QA, a bounded repair loop,
 Pull Request creation, and ticket status update—with evidence retained at every gate
-and human review before merge.
+and explicit repository-owner authorization before merge.
+
+## Actor-Aware Human Authority
+
+Safety limits apply to autonomous Agents, not to the repository owner. An Agent
+must never push a protected branch, authorize its own override, or merge a Pull
+Request. The Controller may push an isolated feature branch, create a Draft PR,
+or merge only for the exact action explicitly authorized by the repository owner
+and recorded as audit evidence.
+
+Pending QA or visual review remains visible as `QA_PENDING` or
+`HUMAN_VISUAL_REVIEW_PENDING`; it does not block a Draft PR. The owner may accept
+the visual gate or override a quality gate with a recorded reason. Such an
+override preserves the failed/pending evidence and must never be reported as QA
+PASS. Only an actual credential, network, branch-conflict, or remote rejection is
+`TECHNICAL_BLOCKED`.
 
 ## Preferred Approach: Reuse First
 

@@ -65,7 +65,7 @@ python3 -m pytest -q
 ## 浏览器与视觉证据
 - 记录 Ticket 列表、详情、existing/generated Prompt source、Planner Hard Break 的 URL、viewport 和截图或等价浏览器证据。
 - 检查长标题、状态、优先级、Prompt source 和错误原因无明显遮挡/溢出，Run eligibility 与禁用原因可理解。
-- 页面/DOM/API 不得出现完整 Secret；缺视觉证据且无人类 visual gate 时，UI 部分 `BLOCKED`。
+- 页面/DOM/API 不得出现完整 Secret；缺视觉证据且尚无人类结论时，UI 状态为 `HUMAN_VISUAL_REVIEW_PENDING`，不能 QA PASS，但不阻止创建带 warning 的 Draft PR。Repo Owner 可记录 `HUMAN_VISUAL_PASS` 或带原因的 override；override 不得改写 QA 事实。
 
 ## Scope 与回归检查
 - 允许：在 AIO-17 Web 服务中增加 Ticket API/UI、Prompt resolver、Planner adapter/Run-ready artifacts、Plane v2 normalization/`work-items` mandatory companion change 和对应测试。

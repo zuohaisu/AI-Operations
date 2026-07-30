@@ -22,7 +22,7 @@
 - main 始终保持可交付；QA 前不得 Commit，PASS 后 Commit 只 stage 本 Run changed files。
 - QA 是新的只读进程/上下文，不继承 Developer 自我判断，不修改文件。
 - mandatory companion test/contract updates 留在本票，QA 不得建议推到未来票以接受红灯窗口。
-- direct main push、auto merge、生产访问、Plane Done、并行 Run 均为 0。
+- Agent direct main push、Agent-authorized merge、生产访问、Plane Done、并行 Run 均为 0；Repo Owner 对具体 feature-branch push、Draft PR 或 merge 的显式授权属于 Controller delivery action，不得被误报为越权。
 
 ## In scope
 - Web `Run` 请求立即返回 `run_id`，后台创建一个 owned Run/Worktree 并顺序执行 Developer→deterministic checks→QA。
@@ -33,7 +33,7 @@
 - 同一 repository/Ticket 同时只允许一个 active Run。
 
 ## Out of scope
-- 不 Push、不建 PR、不 Merge、不部署、不写 Plane Done/In Review。
+- 本票的 Developer/QA Agent 不执行 Push/PR/Merge/deploy/Plane write；该票内 scope 限制不取消 Repo Owner 在 delivery 阶段显式授权 Controller push feature branch、创建 Draft PR 或 merge 的权利。
 - 不实现并行队列、自动选下一票、任意 Resume、远程访问或多用户权限。
 - 不允许 QA 修改代码，不允许 Developer 自判 PASS 或扩大 findings。
 - 不改 `.github/workflows/**`，不保存真实 Secret；改动文件不超过 20。
@@ -62,5 +62,4 @@ python3 -m pytest -q
 3. 每轮记录输入 hash、findings、changed files、check evidence 和角色进程身份。
 4. 输出 ticket-owned changed files、pre-existing dirty paths、三条测试命令/exit code、QA/Commit 调用序列和回滚方式。
 - 回滚：`git revert` Web workflow adapter/策略，保留 artifacts；不得改写历史 verdict。
-- Escalation：无法确定 finding 是否可修、Diff 归属或 Commit stage 白名单时 `BLOCKED_NEEDS_HUMAN`。
-
+- Escalation：无法确定 finding 是否可修或 Commit stage 白名单时 `BLOCKED_NEEDS_HUMAN`。可机械拆分的混合提交/文件为 `DIFF_SPLIT_REQUIRED`，不得误报 requirements blocker；实际 credential/network/conflict/remote failure 才是 `TECHNICAL_BLOCKED`。

@@ -1,7 +1,8 @@
-"""Minimal GitHub pull-request adapter.
+"""Minimal GitHub pull-request adapter with actor-aware merge authorization.
 
-The connector creates reviewable PRs only.  It never pushes branches, merges a
-PR, or permits the base branch to be submitted as its own head.
+Draft PR creation remains reviewable and non-destructive.  Merge is available
+only when the repository owner supplies a specific, auditable authorization;
+an Agent cannot grant that authority to itself.
 """
 
 from __future__ import annotations
@@ -11,6 +12,8 @@ import os
 import urllib.error
 import urllib.request
 from typing import Any
+
+from ticket_autopilot.services.delivery_policy import require_user_authorization
 
 GITHUB_API_ROOT = "https://api.github.com"
 USER_AGENT = "ticket-autopilot-connector/0.1"
@@ -58,7 +61,7 @@ def create_pr(
     draft: bool = True,
     token: str | None = None,
 ) -> dict[str, Any]:
-    """Create a draft (by default) PR for human review; never merge it."""
+    """Create a draft (by default) PR for repository-owner review."""
     _validate_pr_target(repo, base, head)
     if not title:
         raise ValueError("title is required")
@@ -96,3 +99,70 @@ def create_pr(
     return {"number": result["number"], "url": result["html_url"],
             "html_url": result["html_url"], "draft": result.get("draft", draft),
             "pull_request": result}
+
+
+def merge_pr(
+    *,
+    repo: str,
+    pull_number: int,
+    authorization: dict[str, Any] | None,
+    merge_method: str = "merge",
+    commit_title: str | None = None,
+    commit_message: str | None = None,
+    token: str | None = None,
+) -> dict[str, Any]:
+    """Merge one PR only after an explicit repository-owner instruction."""
+    if not repo or repo.count("/") != 1:
+        raise ValueError("repo must be in 'owner/repository' form")
+    if not isinstance(pull_number, int) or isinstance(pull_number, bool) or pull_number < 1:
+        raise ValueError("pull_number must be a positive integer")
+    if merge_method not in {"merge", "squash", "rebase"}:
+        raise ValueError("merge_method must be merge, squash, or rebase")
+    audit = require_user_authorization(authorization, action="merge")
+
+    payload: dict[str, Any] = {"merge_method": merge_method}
+    if commit_title:
+        payload["commit_title"] = commit_title
+    if commit_message:
+        payload["commit_message"] = commit_message
+    api_token = resolve_token(token)
+    request = urllib.request.Request(
+        f"{GITHUB_API_ROOT}/repos/{repo}/pulls/{pull_number}/merge",
+        data=json.dumps(payload).encode("utf-8"),
+        method="PUT",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {api_token}",
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read().decode("utf-8")
+            result = json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            detail = str(exc)
+        raise GitHubAPIError(
+            f"merge_pr {repo}#{pull_number} failed: HTTP {exc.code} {detail}"
+        ) from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise GitHubAPIError(
+            f"merge_pr {repo}#{pull_number} failed: {exc}"
+        ) from exc
+
+    if not isinstance(result, dict) or result.get("merged") is not True:
+        raise GitHubAPIError(
+            f"merge_pr {repo}#{pull_number} returned an unmerged response: {result}"
+        )
+    return {
+        "merged": True,
+        "sha": result.get("sha"),
+        "message": result.get("message"),
+        "pull_request": pull_number,
+        "authorization": audit,
+    }
