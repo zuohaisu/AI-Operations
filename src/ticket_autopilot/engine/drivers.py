@@ -6,7 +6,8 @@
   - cli   : spawns an external CLI (default `claude`) in a *strict* sandbox:
               * cwd is forced inside an allowed root (no escaping the dir)
               * a tools allowlist is passed via --allowedTools
-              * --permission-mode read-only by default (no writes)
+              * the engine-internal permission mode stays read-only by default
+                (no writes) and is translated to each CLI's real flag values
             This is the guardrail the user asked for ("read-only + designated
             directory, strictest first").
   - script: calls a python function in handlers/<entry>.py — used for the
@@ -34,6 +35,22 @@ from .guardrails import (
     check_role_boundary,
     check_tools,
 )
+
+
+# The engine's permission vocabulary ("read-only"/"write") is internal; the
+# real CLIs only accept their own --permission-mode choices (claude 2.x:
+# acceptEdits/auto/bypassPermissions/manual/dontAsk/plan; qodercli 1.x:
+# default/plan/auto/bypass_permissions/accept_edits/dont_ask), so passing the
+# internal value verbatim makes the CLI exit 1 before the agent even starts.
+# Read-only roles omit the flag: in non-interactive -p mode both CLIs deny any
+# tool outside the allowlist, so the tools allowlist remains the boundary.
+# Unknown commands keep the verbatim pass-through for custom agent CLIs.
+_CLI_PERMISSION_MODES: dict[str, dict[str, str | None]] = {
+    "claude": {"read-only": None, "write": "acceptEdits"},
+    "qodercli": {"read-only": None, "write": "accept_edits"},
+}
+# claude 2.x has no --cwd flag; subprocess.run(cwd=...) already pins the dir.
+_CLI_NO_CWD_FLAG = {"claude"}
 
 
 # ---------------------------------------------------------------------------
@@ -208,9 +225,16 @@ def cli_call(agent: dict, inputs: dict, node: dict, engine_root: str,
         tools_flag = agent.get("tools_flag", "--allowedTools")
         tools_as_args = agent.get("tools_as_args", False)
 
-        cmd = [command, "-p", prompt,
-               "--permission-mode", permission_mode,
-               "--cwd", cwd]
+        cmd = [command, "-p", prompt]
+        cli_name = os.path.basename(command)
+        # A probed catalog choice (agent.cli_permission_mode) wins; otherwise the
+        # internal mode is translated to the CLI's own vocabulary.
+        cli_mode = (agent.get("cli_permission_mode")
+                    or _CLI_PERMISSION_MODES.get(cli_name, {}).get(permission_mode, permission_mode))
+        if cli_mode:
+            cmd += ["--permission-mode", cli_mode]
+        if cli_name not in _CLI_NO_CWD_FLAG:
+            cmd += ["--cwd", cwd]
         if tools:
             if tools_as_args:
                 cmd += [tools_flag, *tools]

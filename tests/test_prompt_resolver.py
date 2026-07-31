@@ -46,7 +46,8 @@ def test_existing_prompts_bypass_planner_and_copy_bytes(tmp_path: Path):
 
 def test_planner_generates_only_missing_role_without_changing_existing(tmp_path: Path):
     service = resolver(tmp_path)
-    dev = service.canonical_paths("AIO-18")["dev"]
+    paths = service.canonical_paths("AIO-18")
+    dev = paths["dev"]
     dev.write_text("existing developer content\n", encoding="utf-8")
     calls = []
 
@@ -60,11 +61,13 @@ def test_planner_generates_only_missing_role_without_changing_existing(tmp_path:
     assert dev.read_text(encoding="utf-8") == "existing developer content\n"
     assert result["prompts"]["dev"]["source"] == "existing_file"
     assert result["prompts"]["acceptance"]["source"] == "planner_generated"
+    # The generated acceptance Prompt is persisted to its canonical tasks/ file.
+    assert paths["acceptance"].read_text(encoding="utf-8").startswith("立即执行")
 
 
-def test_planner_generates_both_prompts_into_artifacts_only(tmp_path: Path):
+def test_planner_generates_both_prompts_into_canonical_tasks_and_artifacts(tmp_path: Path):
     service = resolver(tmp_path)
-    before = sorted((tmp_path / "tasks").iterdir())
+    paths = service.canonical_paths("AIO-18")
     calls = []
 
     def planner(**kwargs):
@@ -75,10 +78,15 @@ def test_planner_generates_both_prompts_into_artifacts_only(tmp_path: Path):
 
     assert calls[0]["missing_roles"] == ("dev", "acceptance")
     assert result["status"] == "READY"
-    assert sorted((tmp_path / "tasks").iterdir()) == before
+    # Generated Prompts now live at their canonical tasks/ paths so Run reads them.
+    for role in ("dev", "acceptance"):
+        assert paths[role].read_text(encoding="utf-8").startswith("立即执行")
+        assert result["prompts"][role]["source"] == "planner_generated"
+        assert result["prompts"][role]["canonical_path"] == str(paths[role].relative_to(tmp_path))
     artifact = tmp_path / result["artifact_dir"]
-    assert (artifact / "dev-prompt.md").read_text().startswith("立即执行")
-    assert (artifact / "acceptance-prompt.md").read_text().startswith("立即执行")
+    # The owned Run artifact keeps a byte-identical mirror for provenance.
+    assert (artifact / "dev-prompt.md").read_bytes() == paths["dev"].read_bytes()
+    assert (artifact / "acceptance-prompt.md").read_bytes() == paths["acceptance"].read_bytes()
 
 
 def test_planner_failure_or_missing_role_is_hard_break(tmp_path: Path):

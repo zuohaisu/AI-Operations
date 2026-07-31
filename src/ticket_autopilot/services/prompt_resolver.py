@@ -1,7 +1,9 @@
 """Deterministic Prompt reuse and bounded Planner preparation for AIO-18.
 
-This module never starts Developer or QA.  It copies canonical task Prompts
-byte-for-byte and confines generated Prompts plus provenance to one Run artifact.
+This module never starts Developer or QA.  Existing canonical task Prompts are
+copied byte-for-byte; Planner-generated Prompts are written to their canonical
+``tasks/`` files (where the Run step reads them) and mirrored into the owned Run
+artifact for provenance.
 """
 
 from __future__ import annotations
@@ -137,8 +139,15 @@ class PromptResolver:
                     source = "existing_file"
                     canonical = str(existing[role].relative_to(self.repository))
                 else:
-                    destination.write_text(generated[role], encoding="utf-8")
-                    source, canonical = "planner_generated", None
+                    # Persist the freshly generated Prompt to its canonical
+                    # tasks/ file so humans, git, and the Run step all read it
+                    # from one place, then mirror the exact bytes into the
+                    # owned Run artifact for provenance.
+                    paths[role].parent.mkdir(parents=True, exist_ok=True)
+                    paths[role].write_text(generated[role], encoding="utf-8")
+                    destination.write_bytes(paths[role].read_bytes())
+                    source = "planner_generated"
+                    canonical = str(paths[role].relative_to(self.repository))
                 metadata["prompts"][role] = {
                     "source": source, "canonical_path": canonical,
                     "artifact_path": str(destination.relative_to(self.repository)),
@@ -149,6 +158,14 @@ class PromptResolver:
             metadata["status"] = "HARD_BREAK_PLANNER"
             metadata["planner_outcome"] = "failed"
             metadata["hard_break_reason"] = str(exc) or type(exc).__name__
+            # Adapter failures carry a stable classification and a non-secret
+            # profile summary; keep both in the artifact for diagnosis.
+            code = getattr(exc, "code", None)
+            if isinstance(code, str) and code:
+                metadata["planner_error_code"] = code
+            profile = getattr(exc, "profile", None)
+            if isinstance(profile, dict) and profile:
+                metadata["planner_profile"] = {key: str(value) for key, value in profile.items()}
         self._write_json(artifact_dir / "prompt-metadata.json", metadata)
         return {**metadata, "artifact_dir": str(artifact_dir.relative_to(self.repository))}
 

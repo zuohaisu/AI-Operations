@@ -92,13 +92,43 @@ class TestCliDriver(unittest.TestCase):
         self.assertEqual(result, "done")
         run.assert_called_once()
         command = run.call_args.args[0]
-        self.assertIn("--permission-mode", command)
-        self.assertEqual(command[command.index("--permission-mode") + 1], "read-only")
+        # claude 2.x rejects the internal "read-only" value and has no --cwd
+        # flag; the read-only boundary is the tools allowlist + subprocess cwd.
+        self.assertNotIn("--permission-mode", command)
+        self.assertNotIn("--cwd", command)
         self.assertIn("--allowedTools", command)
         self.assertEqual(command[command.index("--allowedTools") + 1], "Read,Glob")
-        self.assertIn("--cwd", command)
         self.assertIn("--append-system-prompt", command)
         self.assertEqual(run.call_args.kwargs["cwd"], os.path.join(PKG_ROOT, "sandbox"))
+
+    @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
+    def test_translates_write_mode_to_each_clis_real_flag_value(self, run):
+        run.return_value = mock.Mock(returncode=0, stdout="ok\n", stderr="")
+        policy = drivers.GuardrailPolicy(
+            allowed_roots=["sandbox"], read_only=False,
+            tool_whitelist=["Read", "Edit", "Write", "Bash"],
+        )
+        for command_name, expected in (("claude", "acceptEdits"), ("qodercli", "accept_edits")):
+            with self.subTest(command=command_name):
+                agent = {
+                    "driver": "cli", "command": command_name, "cwd": "sandbox",
+                    "permission_mode": "write", "tools": ["Read", "Edit", "Write", "Bash"],
+                }
+                drivers.cli_call(agent, {}, {"agent": "executor"}, PKG_ROOT, policy=policy)
+                command = run.call_args.args[0]
+                self.assertEqual(command[command.index("--permission-mode") + 1], expected)
+                self.assertNotIn("write", command)
+
+    @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
+    def test_unknown_cli_keeps_verbatim_permission_mode(self, run):
+        run.return_value = mock.Mock(returncode=0, stdout="ok\n", stderr="")
+        agent = {"driver": "cli", "command": "agent-cli", "cwd": "sandbox", "tools": ["Read"]}
+
+        drivers.cli_call(agent, {}, {"agent": "verifier"}, PKG_ROOT)
+
+        command = run.call_args.args[0]
+        self.assertEqual(command[command.index("--permission-mode") + 1], "read-only")
+        self.assertIn("--cwd", command)
 
     @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
     def test_builds_qodercli_qa_command_with_variadic_tools(self, run):
@@ -125,7 +155,10 @@ class TestCliDriver(unittest.TestCase):
         self.assertEqual(result, {"decision": "accept", "reason": "ok"})
         command = run.call_args.args[0]
         self.assertEqual(command[0], "qodercli")
-        self.assertEqual(command[command.index("--permission-mode") + 1], "read-only")
+        # qodercli 1.x rejects the internal "read-only" value; the flag is
+        # omitted and the read-tool allowlist stays the boundary in -p mode.
+        self.assertNotIn("--permission-mode", command)
+        self.assertEqual(command[command.index("--cwd") + 1], os.path.join(PKG_ROOT, "sandbox"))
         tools_at = command.index("--tools")
         self.assertEqual(command[tools_at + 1:tools_at + 4], ["Read", "Glob", "Grep"])
         self.assertNotIn("--allowedTools", command)

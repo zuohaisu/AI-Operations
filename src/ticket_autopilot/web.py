@@ -25,6 +25,7 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 
 from ticket_autopilot.connectors import plane
+from ticket_autopilot.services.agent_catalog import AgentCatalog, CatalogError, PROFILE_KEYS, empty_profile, normalize_profile
 from ticket_autopilot.services.prompt_resolver import PromptPreparationError, PromptResolver
 from ticket_autopilot.services.ticket_contract import preflight_plane_issue, readiness_errors
 from ticket_autopilot.services.run_events import redact
@@ -45,7 +46,7 @@ MASK = "********"
 _DEFAULT_CONFIG: dict[str, Any] = {
     "plane": {"workspace": "", "project": "", "api_key": ""},
     "repository": "",
-    "agents": {"planner": "", "developer": "", "qa": ""},
+    "agents": {"planner": empty_profile(), "developer": empty_profile(), "qa": empty_profile()},
 }
 _SECRET_MARKERS = ("api_key", "secret", "token", "password", "credential")
 
@@ -124,13 +125,21 @@ def redact_secrets(value: Any) -> Any:
 class LocalConfig:
     """Private JSON-backed local settings with a deliberately small schema."""
 
-    def __init__(self, home: str | Path | None = None):
+    def __init__(self, home: str | Path | None = None,
+                 agent_profile_validator: Callable[[str, dict[str, str]], dict[str, str]] | None = None):
         self.home = app_home(home)
         self.path = self.home / CONFIG_FILENAME
+        self.agent_profile_validator = agent_profile_validator
         _private_directory(self.home)
 
     def load(self, *, redacted: bool = True) -> dict[str, Any]:
         stored = _read_json(self.path) or {}
+        if isinstance(stored.get("agents"), dict):
+            # Legacy configs stored a bare command string per role; normalise
+            # to the structured profile shape before the type-driven merge.
+            stored = {**stored, "agents": {
+                role: normalize_profile(value) for role, value in stored["agents"].items()
+            }}
         config = _copy_json(_DEFAULT_CONFIG)
         self._merge(config, stored)
         _private_file(self.path) if self.path.exists() else None
@@ -142,6 +151,10 @@ class LocalConfig:
         current = self.load(redacted=False)
         updated = _copy_json(current)
         self._merge_allowed(updated, incoming)
+        if self.agent_profile_validator is not None and isinstance(incoming.get("agents"), dict):
+            for role in ("planner", "developer", "qa"):
+                if role in incoming["agents"]:
+                    updated["agents"][role] = self.agent_profile_validator(role, updated["agents"][role])
         atomic_json_write(self.path, updated)
         return redact_secrets(updated)
 
@@ -150,7 +163,7 @@ class LocalConfig:
         for key, value in source.items():
             if key in target and isinstance(target[key], dict) and isinstance(value, dict):
                 LocalConfig._merge(target[key], value)
-            elif key in target and isinstance(value, str):
+            elif key in target and isinstance(target[key], str) and isinstance(value, str):
                 target[key] = value
 
     @staticmethod
@@ -160,22 +173,34 @@ class LocalConfig:
                 if not isinstance(incoming[key], str):
                     raise LocalServiceError(f"{key} must be a string")
                 target[key] = incoming[key]
-        for section, keys in (("plane", ("workspace", "project", "api_key")),
-                              ("agents", ("planner", "developer", "qa"))):
-            if section not in incoming:
-                continue
-            supplied = incoming[section]
+        if "plane" in incoming:
+            supplied = incoming["plane"]
             if not isinstance(supplied, dict):
-                raise LocalServiceError(f"{section} must be an object")
-            for key in keys:
+                raise LocalServiceError("plane must be an object")
+            for key in ("workspace", "project", "api_key"):
                 if key in supplied:
                     if not isinstance(supplied[key], str):
-                        raise LocalServiceError(f"{section}.{key} must be a string")
+                        raise LocalServiceError(f"plane.{key} must be a string")
                     # A settings page sends the displayed mask back unchanged;
                     # that must not overwrite a real saved credential.
-                    if section == "plane" and key == "api_key" and supplied[key] == MASK:
+                    if key == "api_key" and supplied[key] == MASK:
                         continue
-                    target[section][key] = supplied[key]
+                    target["plane"][key] = supplied[key]
+        if "agents" in incoming:
+            supplied = incoming["agents"]
+            if not isinstance(supplied, dict):
+                raise LocalServiceError("agents must be an object")
+            for role in ("planner", "developer", "qa"):
+                if role not in supplied:
+                    continue
+                value = supplied[role]
+                if not isinstance(value, (str, dict)):
+                    raise LocalServiceError(f"agents.{role} must be an object")
+                if isinstance(value, dict):
+                    for key, item in value.items():
+                        if key not in PROFILE_KEYS or not isinstance(item, str):
+                            raise LocalServiceError(f"agents.{role}.{key} is not a supported string field")
+                target["agents"][role] = normalize_profile(value)
 
 
 class ServiceManager:
@@ -417,9 +442,13 @@ class TicketBoard:
     """Thin Web boundary over the existing Plane connector and ticket contract."""
 
     def __init__(self, settings: LocalConfig, *, repository: str | Path | None = None, planner: Callable[..., dict[str, str]] | None = None,
-                 web_loop_factory: Callable[..., WebAgentLoop] | None = None):
+                 web_loop_factory: Callable[..., WebAgentLoop] | None = None, catalog: AgentCatalog | None = None):
         self.settings = settings
         self.repository = Path(repository or Path.cwd()).resolve()
+        self.catalog = catalog or AgentCatalog()
+        if planner is None:
+            from ticket_autopilot.services.planner_adapter import build_planner
+            planner = build_planner(settings, self.repository, self.catalog)
         self.planner = planner
         self.web_loop_factory = web_loop_factory or self._default_web_loop
         self._web_loops: dict[str, WebAgentLoop] = {}
@@ -471,24 +500,92 @@ class TicketBoard:
             return {"status": "BLOCKED_REQUIREMENTS", "reason": str(exc), "run_id": None,
                     "developer_calls": 0, "qa_calls": 0}
 
-    @staticmethod
-    def _default_web_loop(*, settings: LocalConfig, repository: Path) -> WebAgentLoop:
+    def _default_web_loop(self, *, settings: LocalConfig, repository: Path) -> WebAgentLoop:
         """Build the one product adapter; individual external calls remain isolated."""
+        import uuid
+
         from ticket_autopilot.connectors import qa
         from ticket_autopilot.engine import drivers
+        from ticket_autopilot.engine.guardrails import (
+            DEVELOPER_TOOL_WHITELIST, GuardrailPolicy, RunExecutionContext,
+        )
+        from ticket_autopilot.services.agent_sessions import (
+            LEDGER_FILENAME, SessionLedger, parse_codex_session_id,
+        )
 
-        config = settings.load(redacted=False)["agents"]
-        developer_command, qa_command = config.get("developer"), config.get("qa")
-        if not developer_command or not qa_command:
-            raise WebAgentLoopError("BLOCKED_REQUIREMENTS: configure Developer and QA Agent commands")
+        catalog = self.catalog
+        profiles = settings.load(redacted=False)["agents"]
+        developer_profile, qa_profile = profiles.get("developer"), profiles.get("qa")
+        if not (developer_profile or {}).get("provider") or not (qa_profile or {}).get("provider"):
+            raise WebAgentLoopError("BLOCKED_REQUIREMENTS: configure Developer and QA Agent providers")
+
+        secret_values = (settings.load(redacted=False)["plane"].get("api_key", ""),)
+        run_manager = RunManager(repository, known_secrets=secret_values)
+
+        def session_event(run: dict[str, Any], *, stage: str, role: str, status: str,
+                          event_type: str, details: dict[str, Any], round: int = 0) -> None:
+            actor = "qa_agent" if role == "qa" else "developer_agent"
+            run_manager.append_event(run["run_id"], stage=stage, role=role, status=status,
+                                     event_type=event_type, round=round,
+                                     artifact_refs=(LEDGER_FILENAME,), details=details, actor_type=actor)
 
         def developer(**kwargs: Any) -> Any:
             run = kwargs["run"]
-            agent = {"role": "developer", "command": developer_command, "cwd": run["worktree"],
-                     "permission_mode": "write", "tools": ["Read", "Glob", "Grep", "Edit", "Write", "Bash"],
-                     "allowed_roots": [run["worktree"]], "system": kwargs["prompt"] + "\nDo not run git commit."}
-            return drivers.cli_call(agent, {key: kwargs[key] for key in ("ticket_spec", "findings")},
-                                    {"agent": "developer"}, str(repository))
+            policy = GuardrailPolicy(allowed_roots=[run["worktree"]], read_only=False,
+                                     tool_whitelist=list(DEVELOPER_TOOL_WHITELIST))
+            run_context = RunExecutionContext(run_id=run["run_id"], worktree=run["worktree"], branch=run["branch"])
+            inputs = {key: kwargs[key] for key in ("ticket_spec", "findings")}
+
+            def call(session: dict[str, Any] | None) -> Any:
+                agent = catalog.build_agent(
+                    developer_profile, role="developer", cwd=run["worktree"],
+                    allowed_roots=[run["worktree"]],
+                    system=kwargs["prompt"] + "\nDo not run git commit.",
+                    session=session,
+                )
+                return drivers.cli_call(agent, inputs, {"agent": "developer"}, str(repository),
+                                        policy=policy, run_context=run_context)
+
+            ledger = SessionLedger(run["artifact_dir"])
+            provider = developer_profile["provider"]
+            base_entry = {"role": "developer", "provider": provider,
+                          "model": developer_profile.get("model", ""),
+                          "sandbox": run["worktree"], "permission_mode": "write"}
+            stored = ledger.get("developer")
+            if stored is None:
+                # First attempt: open the role's persistent session.
+                if provider == "codex":
+                    output = call({"mode": "new"})
+                    session_id = parse_codex_session_id(output)
+                    entry = ledger.record("developer", {**base_entry, "mode": "new", "session_id": session_id})
+                    if session_id:
+                        session_event(run, stage="development", role="developer", status="ACTIVE",
+                                      event_type="agent_session_started", details=entry)
+                    else:
+                        session_event(run, stage="development", role="developer", status="DEGRADED",
+                                      event_type="session_resume_unavailable",
+                                      details={**entry, "reason": "codex --json output carried no parseable session id; later attempts run fresh with findings handover"})
+                    return output
+                session_id = str(uuid.uuid4())
+                entry = ledger.record("developer", {**base_entry, "mode": "new", "session_id": session_id})
+                session_event(run, stage="development", role="developer", status="ACTIVE",
+                              event_type="agent_session_started", details=entry)
+                return call({"mode": "new", "session_id": session_id})
+
+            session_id = stored.get("session_id")
+            if not session_id:
+                # Recorded degradation: fresh session, findings travel in inputs.
+                return call({"mode": "ephemeral"})
+            try:
+                return call({"mode": "resume", "session_id": session_id})
+            except Exception as exc:
+                ledger.record("developer", {**stored, "session_id": None, "mode": "degraded"})
+                session_event(run, stage="development", role="developer", status="DEGRADED",
+                              event_type="session_resume_failed",
+                              details={**base_entry, "session_id": session_id,
+                                       "reason": (str(exc) or type(exc).__name__)[:300],
+                                       "recovery": "one fresh retry with findings handover"})
+                return call({"mode": "ephemeral"})
 
         def checker(run, *, qa_attempt: int) -> dict[str, Any]:
             spec = json.loads((Path(run.artifact_dir) / "ticket-spec.json").read_text(encoding="utf-8"))
@@ -523,15 +620,24 @@ class TicketBoard:
 
         def independent_qa(**kwargs: Any) -> Any:
             run = kwargs["run"]
-            agent = dict(qa.QA_AGENT, command=qa_command, cwd=run["worktree"], allowed_roots=[run["worktree"]])
+            agent = catalog.build_agent(
+                qa_profile, role="qa", cwd=run["worktree"], allowed_roots=[run["worktree"]],
+                system=qa.QA_SYSTEM_PROMPT, expect="json", session={"mode": "ephemeral"},
+            )
+            entry = SessionLedger(run["artifact_dir"]).record("qa", {
+                "role": "qa", "provider": qa_profile["provider"], "model": qa_profile.get("model", ""),
+                "sandbox": run["worktree"], "permission_mode": "read-only",
+                "mode": "ephemeral", "session_id": None, "qa_attempt": kwargs["qa_attempt"],
+            })
+            session_event(run, stage="qa", role="qa", status="ACTIVE",
+                          event_type="agent_session_started", details=entry, round=kwargs["qa_attempt"])
             return qa.run_qa(agent=agent, engine_root=str(repository), ticket_spec=kwargs["ticket_spec"],
                              diff=kwargs["diff"], test_evidence={"checks": kwargs["check_evidence"]},
                              run_id=run["run_id"], qa_attempt=kwargs["qa_attempt"],
                              ticket_context=kwargs["prompt"])
 
-        secret_values = (settings.load(redacted=False)["plane"].get("api_key", ""),)
         return WebAgentLoop(
-            RunManager(repository, known_secrets=secret_values), developer=developer, checker=checker,
+            run_manager, developer=developer, checker=checker,
             qa=independent_qa, known_secrets=secret_values,
         )
 
@@ -618,22 +724,35 @@ class SettingsHandler(BaseHTTPRequestHandler):
         return self.server.service_id  # type: ignore[attr-defined]
 
     @property
+    def catalog(self) -> AgentCatalog:
+        catalog = getattr(self.server, "agent_catalog", None)
+        if catalog is None:
+            catalog = AgentCatalog()
+            self.server.agent_catalog = catalog  # type: ignore[attr-defined]
+        return catalog
+
+    @property
     def tickets(self) -> TicketBoard:
         board = getattr(self.server, "ticket_board", None)
         if board is None:
             board = TicketBoard(self.settings, repository=getattr(self.server, "project_root", Path.cwd()),
                                 planner=getattr(self.server, "planner_adapter", None),
-                                web_loop_factory=getattr(self.server, "web_loop_factory", None))
+                                web_loop_factory=getattr(self.server, "web_loop_factory", None),
+                                catalog=self.catalog)
             self.server.ticket_board = board  # type: ignore[attr-defined]
         return board
 
     def do_GET(self) -> None:  # noqa: N802
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         try:
             if path == "/api/health":
                 self._json(HTTPStatus.OK, {"status": "ok", "service_id": self.service_id})
             elif path == "/api/config":
                 self._json(HTTPStatus.OK, self.settings.load(redacted=True))
+            elif path == "/api/agent-catalog":
+                refresh = "refresh=1" in (parsed.query or "")
+                self._json(HTTPStatus.OK, self.catalog.snapshot(refresh=refresh))
             elif path == "/api/tickets":
                 self._json(HTTPStatus.OK, self.tickets.list())
             elif path.startswith("/api/runs/"):
@@ -693,7 +812,9 @@ class SettingsHandler(BaseHTTPRequestHandler):
                 raise LocalServiceError("settings request is invalid")
             value = self._request_json()
             self._json(HTTPStatus.OK, self.settings.save(value))
-        except (ValueError, UnicodeDecodeError, LocalServiceError):
+        except (CatalogError, LocalServiceError) as exc:
+            self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc) or "invalid settings"})
+        except (ValueError, UnicodeDecodeError):
             self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid settings"})
         except OSError:
             self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "could not save settings"})
@@ -736,7 +857,9 @@ class SettingsHandler(BaseHTTPRequestHandler):
 def serve(*, port: int, service_id: str, home: str | Path | None = None) -> None:
     """Run the localhost-only HTTP server in the foreground."""
     server = ThreadingHTTPServer((HOST, port), SettingsHandler)
-    server.settings = LocalConfig(home)  # type: ignore[attr-defined]
+    catalog = AgentCatalog()
+    server.agent_catalog = catalog  # type: ignore[attr-defined]
+    server.settings = LocalConfig(home, agent_profile_validator=catalog.validate_profile)  # type: ignore[attr-defined]
     server.service_id = service_id  # type: ignore[attr-defined]
     server.project_root = Path(os.environ.get("TICKET_AUTOPILOT_PROJECT_ROOT") or Path.cwd()).resolve()  # type: ignore[attr-defined]
     server.serve_forever(poll_interval=0.2)
