@@ -102,6 +102,10 @@ class TestCliDriver(unittest.TestCase):
         self.assertIn("--append-system-prompt", command)
         self.assertEqual(run.call_args.kwargs["cwd"], os.path.join(PKG_ROOT, "sandbox"))
         self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(
+            run.call_args.kwargs["env"]["PATH"].split(os.pathsep)[0],
+            os.path.dirname(sys.executable),
+        )
 
     @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
     def test_translates_write_mode_to_each_clis_real_flag_value(self, run):

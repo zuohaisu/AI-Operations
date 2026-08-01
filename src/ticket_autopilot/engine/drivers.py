@@ -247,9 +247,19 @@ def cli_call(agent: dict, inputs: dict, node: dict, engine_root: str,
     # The Web service is detached from the launching shell.  Never let an Agent
     # CLI inherit a terminal and suspend the Run with SIGTTIN while attempting
     # to read stdin; the complete request is already present in ``cmd``.
+    # Also expose the interpreter environment running Ticket Autopilot first in
+    # PATH.  Agent-owned shell tools must resolve the same project Python as the
+    # Controller instead of silently falling back to macOS's system Python.
+    cli_environment = os.environ.copy()
+    interpreter_bin = os.path.dirname(sys.executable)
+    current_path = cli_environment.get("PATH", "")
+    path_entries = current_path.split(os.pathsep) if current_path else []
+    if interpreter_bin not in path_entries:
+        cli_environment["PATH"] = os.pathsep.join([interpreter_bin, *path_entries])
     proc = subprocess.run(
         cmd, cwd=cwd, capture_output=True, text=True, timeout=600,
         stdin=subprocess.DEVNULL,
+        env=cli_environment,
     )
     if proc.returncode != 0:
         # Some CLIs (notably qodercli) write account/model diagnostics to
