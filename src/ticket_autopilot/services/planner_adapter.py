@@ -35,8 +35,10 @@ Every Prompt MUST:
 - name the ticket issue key and the repository path from the context;
 - require diff attribution for every change and a clean (non-dirty) worktree;
 - state the conditional visual evidence gate ("visual");
-- for "dev": state the Developer role boundary; for "acceptance": state the \
-independent QA/acceptance role boundary.
+- for "dev": state the Developer role boundary;
+- for "acceptance": state the independent read-only QA boundary, require review \
+of Controller-supplied deterministic command evidence, and explicitly prohibit \
+rerunning pytest or commands that write caches, bytecode, or temporary files.
 Do not wrap the JSON in Markdown fences and do not add commentary."""
 
 

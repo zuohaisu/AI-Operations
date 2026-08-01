@@ -18,6 +18,7 @@ from ticket_autopilot.services.planner_adapter import (
     PLANNER_CLI_UNAVAILABLE,
     PLANNER_OUTPUT_INVALID,
     PLANNER_UNCONFIGURED,
+    PLANNER_SYSTEM,
     PlannerAdapterError,
     build_planner,
 )
@@ -70,6 +71,8 @@ def test_claude_planner_builds_read_only_call_and_returns_prompts(tmp_path: Path
     assert agent["tools"] == ["Read", "Glob", "Grep"]
     assert agent["cwd"] == str(tmp_path.resolve())
     assert "--no-session-persistence" in agent["extra_args"]
+    assert "Controller-supplied deterministic command evidence" in agent["system"]
+    assert "rerunning pytest" in agent["system"]
     assert inputs["requested_roles"] == "dev, acceptance"
     assert json.loads(inputs["context"]) == CONTEXT
 

@@ -8,7 +8,6 @@ features can reuse.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -112,23 +111,6 @@ def _verification_environment(repository: Path) -> dict[str, str]:
     current_path = environment.get("PATH", "")
     environment["PATH"] = os.pathsep.join([*path_entries, current_path])
     return environment
-
-
-@contextmanager
-def _qa_python_environment(repository: Path, worktree: Path):
-    """Expose the project's installed Python to read-only QA inside a worktree."""
-    source = repository / ".venv"
-    target = worktree / ".venv"
-    created = False
-    if source.is_dir() and not target.exists():
-        target.symlink_to(source, target_is_directory=True)
-        created = True
-    python = target / "bin" / "python"
-    try:
-        yield str(python) if python.is_file() else sys.executable
-    finally:
-        if created:
-            target.unlink(missing_ok=True)
 
 
 def app_home(home: str | Path | None = None) -> Path:
@@ -858,31 +840,24 @@ class TicketBoard:
             bound_spec, bound_prompt = _bind_agent_inputs(
                 kwargs["ticket_spec"], kwargs["prompt"], repository=repository, worktree=run["worktree"],
             )
-            with _qa_python_environment(repository, Path(run["worktree"])) as qa_python:
-                qa_system = (
-                    qa.QA_SYSTEM_PROMPT
-                    + "\nThe Controller already ran the ticket's exact deterministic commands. "
-                    + f"For independent Python replay in this worktree use `{qa_python}` instead of system `python3`; "
-                    + "it is the Run-provisioned project environment and does not change the ticket contract."
-                )
-                agent = catalog.build_agent(
-                    qa_profile, role="qa", cwd=run["worktree"], allowed_roots=[run["worktree"]],
-                    system=qa_system, expect="json", session={"mode": "ephemeral"},
-                )
-                agent = {**agent, "process_observer": ProcessOutputStore(
-                    run["artifact_dir"], known_secrets=secret_values,
-                ).observer(stage="qa", role="qa", round=kwargs["qa_attempt"])}
-                entry = SessionLedger(run["artifact_dir"]).record("qa", {
-                    "role": "qa", "provider": qa_profile["provider"], "model": qa_profile.get("model", ""),
-                    "sandbox": run["worktree"], "permission_mode": "read-only",
-                    "mode": "ephemeral", "session_id": None, "qa_attempt": kwargs["qa_attempt"],
-                })
-                session_event(run, stage="qa", role="qa", status="ACTIVE",
-                              event_type="agent_session_started", details=entry, round=kwargs["qa_attempt"])
-                return qa.run_qa(agent=agent, engine_root=str(repository), ticket_spec=bound_spec,
-                                 diff=kwargs["diff"], test_evidence={"checks": kwargs["check_evidence"]},
-                                 run_id=run["run_id"], qa_attempt=kwargs["qa_attempt"],
-                                 ticket_context=bound_prompt, python_executable=qa_python)
+            agent = catalog.build_agent(
+                qa_profile, role="qa", cwd=run["worktree"], allowed_roots=[run["worktree"]],
+                system=qa.QA_SYSTEM_PROMPT, expect="json", session={"mode": "ephemeral"},
+            )
+            agent = {**agent, "process_observer": ProcessOutputStore(
+                run["artifact_dir"], known_secrets=secret_values,
+            ).observer(stage="qa", role="qa", round=kwargs["qa_attempt"])}
+            entry = SessionLedger(run["artifact_dir"]).record("qa", {
+                "role": "qa", "provider": qa_profile["provider"], "model": qa_profile.get("model", ""),
+                "sandbox": run["worktree"], "permission_mode": "read-only",
+                "mode": "ephemeral", "session_id": None, "qa_attempt": kwargs["qa_attempt"],
+            })
+            session_event(run, stage="qa", role="qa", status="ACTIVE",
+                          event_type="agent_session_started", details=entry, round=kwargs["qa_attempt"])
+            return qa.run_qa(agent=agent, engine_root=str(repository), ticket_spec=bound_spec,
+                             diff=kwargs["diff"], test_evidence={"checks": kwargs["check_evidence"]},
+                             run_id=run["run_id"], qa_attempt=kwargs["qa_attempt"],
+                             ticket_context=bound_prompt)
 
         return WebAgentLoop(
             run_manager, developer=developer, checker=checker,

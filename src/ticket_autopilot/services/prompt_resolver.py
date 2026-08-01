@@ -145,7 +145,11 @@ class PromptResolver:
                     "repository": ticket_spec["repository"],
                     "template_conventions": {
                         "developer": "immediate action envelope, repository invariants, diff attribution, conditional visual gate",
-                        "acceptance": "immediate action envelope, independent QA boundary, diff attribution, conditional visual gate",
+                        "acceptance": (
+                            "immediate action envelope, independent read-only QA boundary, diff attribution, "
+                            "conditional visual gate, inspect Controller-supplied deterministic evidence without "
+                            "rerunning pytest or commands that write caches, bytecode, or temporary files"
+                        ),
                     },
                 }
                 last_validation_error = ""

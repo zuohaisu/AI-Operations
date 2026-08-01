@@ -23,7 +23,12 @@ _PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 QA_SYSTEM_PROMPT = """You are the independent QA Verifier. Using only read-only \
 inspection, verify the execution result against the plan and the ticket context \
-(acceptance criteria, diff, test evidence). You must not modify code or add tests.
+(acceptance criteria, diff, test evidence). You must not modify code or add tests. \
+The Controller has already run every declared deterministic command and supplied \
+its exit code, stdout, and stderr. Inspect that evidence independently, but do not \
+rerun pytest or any command that writes caches, bytecode, or temporary files. A \
+missing local virtual environment is not a blocker when the supplied Controller \
+evidence is complete and passing.
 Reply with ONLY a qa-verdict JSON object with exactly these fields:
 schema_version ("1.0"), issue_key, run_id, qa_attempt (integer),
 verdict ("PASS"|"FAIL"|"BLOCKED"),
@@ -76,7 +81,7 @@ def _blocked_verdict(
 
 def run_qa(plan=None, result=None, ticket_context=None, agent=None,
            engine_root=None, *, ticket_spec=None, diff=None, test_evidence=None,
-           run_id=None, qa_attempt=None, python_executable=None) -> dict:
+           run_id=None, qa_attempt=None) -> dict:
     agent = agent or QA_AGENT
     engine_root = engine_root or _PKG_ROOT
     issue_key = (ticket_spec or {}).get("issue_key", "UNKNOWN")
@@ -91,7 +96,6 @@ def run_qa(plan=None, result=None, ticket_context=None, agent=None,
         "test_evidence": test_evidence,
         "run_id": effective_run_id,
         "qa_attempt": effective_attempt,
-        "python_executable": python_executable,
         "plan": plan,
         "result": result,
     }
