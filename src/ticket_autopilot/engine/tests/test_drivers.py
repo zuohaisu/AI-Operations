@@ -168,6 +168,44 @@ class TestCliDriver(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["cwd"], os.path.join(PKG_ROOT, "sandbox"))
 
     @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
+    def test_cli_failure_uses_stdout_when_stderr_is_empty(self, run):
+        run.return_value = mock.Mock(
+            returncode=1,
+            stdout="Warning: no models available for your account.\n",
+            stderr="",
+        )
+        agent = {
+            "driver": "cli",
+            "command": "qodercli",
+            "cwd": "sandbox",
+            "permission_mode": "read-only",
+            "tools": ["Read"],
+            "tools_flag": "--tools",
+            "tools_as_args": True,
+        }
+
+        with self.assertRaisesRegex(
+            RuntimeError, "no models available for your account"
+        ):
+            drivers.cli_call(agent, {}, {"agent": "verifier"}, PKG_ROOT)
+
+    @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
+    def test_cli_failure_without_output_has_explicit_diagnostic(self, run):
+        run.return_value = mock.Mock(returncode=1, stdout="", stderr="")
+        agent = {
+            "driver": "cli",
+            "command": "qodercli",
+            "cwd": "sandbox",
+            "permission_mode": "read-only",
+            "tools": ["Read"],
+            "tools_flag": "--tools",
+            "tools_as_args": True,
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "no diagnostic output"):
+            drivers.cli_call(agent, {}, {"agent": "verifier"}, PKG_ROOT)
+
+    @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
     def test_argv_template_substitutes_placeholders_codex_style(self, run):
         run.return_value = mock.Mock(returncode=0, stdout="a plan\n", stderr="")
         agent = {

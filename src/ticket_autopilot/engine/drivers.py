@@ -252,8 +252,14 @@ def cli_call(agent: dict, inputs: dict, node: dict, engine_root: str,
         stdin=subprocess.DEVNULL,
     )
     if proc.returncode != 0:
+        # Some CLIs (notably qodercli) write account/model diagnostics to
+        # stdout even when they exit non-zero.  Preserve whichever stream has
+        # actionable text so a Web HARD_BREAK never renders an empty reason.
+        diagnostic = (proc.stderr or "").strip() or (proc.stdout or "").strip()
+        if not diagnostic:
+            diagnostic = "no diagnostic output"
         raise RuntimeError(
-            f"cli driver ({cmd[0]}) exited {proc.returncode}: {proc.stderr}"
+            f"cli driver ({cmd[0]}) exited {proc.returncode}: {diagnostic[:2000]}"
         )
     return _maybe_json(proc.stdout.strip(), agent)
 
