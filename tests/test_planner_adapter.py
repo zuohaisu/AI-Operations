@@ -73,6 +73,7 @@ def test_claude_planner_builds_read_only_call_and_returns_prompts(tmp_path: Path
     assert "--no-session-persistence" in agent["extra_args"]
     assert "Controller-supplied deterministic command evidence" in agent["system"]
     assert "rerunning pytest" in agent["system"]
+    assert "must not require a commit or clean worktree" in agent["system"]
     assert inputs["requested_roles"] == "dev, acceptance"
     assert json.loads(inputs["context"]) == CONTEXT
 

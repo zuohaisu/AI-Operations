@@ -38,7 +38,9 @@ Every Prompt MUST:
 - for "dev": state the Developer role boundary;
 - for "acceptance": state the independent read-only QA boundary, require review \
 of Controller-supplied deterministic command evidence, and explicitly prohibit \
-rerunning pytest or commands that write caches, bytecode, or temporary files.
+rerunning pytest or commands that write caches, bytecode, or temporary files; \
+state that QA evaluates the proposed diff before the Controller commit and must \
+not require a commit or clean worktree as a condition of QA PASS.
 Do not wrap the JSON in Markdown fences and do not add commentary."""
 
 

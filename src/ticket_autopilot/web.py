@@ -8,6 +8,7 @@ features can reuse.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -799,12 +800,21 @@ class TicketBoard:
             output = ProcessOutputStore(run.artifact_dir, known_secrets=secret_values)
             checks = []
             for command in commands:
+                started_at = datetime.now(timezone.utc).isoformat()
                 output.append(stage="verification", role="controller", stream="process",
                               message=f"started command={command}", round=qa_attempt)
                 proc = subprocess.run(["/bin/sh", "-c", command], cwd=run.worktree, capture_output=True,
                                       text=True, stdin=subprocess.DEVNULL, timeout=60, check=False,
                                       env=verification_environment)
-                checks.append({"command": command, "exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr})
+                checks.append({
+                    "command": command,
+                    "cwd": run.worktree,
+                    "started_at": started_at,
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                    "exit_code": proc.returncode,
+                    "stdout": proc.stdout,
+                    "stderr": proc.stderr,
+                })
                 if proc.stdout:
                     output.append(stage="verification", role="controller", stream="stdout",
                                   message=proc.stdout, round=qa_attempt)
@@ -819,6 +829,8 @@ class TicketBoard:
                                         capture_output=True, text=True, check=False)
             untracked_proc = subprocess.run(["git", "ls-files", "--others", "--exclude-standard"], cwd=run.worktree,
                                              capture_output=True, text=True, check=False)
+            head_proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=run.worktree,
+                                       capture_output=True, text=True, check=False)
             changed_files = [line for line in files_proc.stdout.splitlines() if line]
             diff_parts = [diff_proc.stdout]
             for path in (line for line in untracked_proc.stdout.splitlines() if line):
@@ -830,10 +842,22 @@ class TicketBoard:
                             "diff": "", "qa_attempt": qa_attempt}
                 changed_files.append(path)
                 diff_parts.append(untracked_diff.stdout)
+            provenance = {
+                "phase": "pre_commit_qa",
+                "commit_policy": "Controller creates the ticket commit only after QA PASS",
+                "worktree": run.worktree,
+                "branch": run.branch,
+                "base_sha": run.base_sha,
+                "head_sha": head_proc.stdout.strip() if head_proc.returncode == 0 else None,
+                "pre_existing_dirty_paths": [],
+                "current_changed_files": changed_files,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
             return {"verified": diff_proc.returncode == 0 and files_proc.returncode == 0 and untracked_proc.returncode == 0
+                                and head_proc.returncode == 0
                                 and bool(changed_files) and all(item["exit_code"] == 0 for item in checks),
                     "checks": checks, "changed_files": changed_files, "diff": "".join(diff_parts),
-                    "qa_attempt": qa_attempt}
+                    "provenance": provenance, "qa_attempt": qa_attempt}
 
         def independent_qa(**kwargs: Any) -> Any:
             run = kwargs["run"]
@@ -855,7 +879,7 @@ class TicketBoard:
             session_event(run, stage="qa", role="qa", status="ACTIVE",
                           event_type="agent_session_started", details=entry, round=kwargs["qa_attempt"])
             return qa.run_qa(agent=agent, engine_root=str(repository), ticket_spec=bound_spec,
-                             diff=kwargs["diff"], test_evidence={"checks": kwargs["check_evidence"]},
+                             diff=kwargs["diff"], test_evidence=kwargs["verification_evidence"],
                              run_id=run["run_id"], qa_attempt=kwargs["qa_attempt"],
                              ticket_context=bound_prompt)
 

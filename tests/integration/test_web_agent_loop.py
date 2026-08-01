@@ -38,6 +38,7 @@ def loop(fixture, outcomes, calls, *, unsafe=False):
         return {"verified": True, "checks": [{"exit_code": 0}], "changed_files": ["../foreign" if unsafe else "change.txt"], "diff": "diff --git a/change.txt b/change.txt\n+changed\n"}
     def qa(**kwargs):
         calls.append(("qa", kwargs))
+        assert kwargs["verification_evidence"]["verified"] is True
         outcome = outcomes.pop(0)
         if isinstance(outcome, BaseException): raise outcome
         return verdict(spec(), kwargs["run"]["run_id"], kwargs["qa_attempt"], outcome)

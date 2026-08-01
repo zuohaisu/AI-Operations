@@ -148,7 +148,8 @@ class PromptResolver:
                         "acceptance": (
                             "immediate action envelope, independent read-only QA boundary, diff attribution, "
                             "conditional visual gate, inspect Controller-supplied deterministic evidence without "
-                            "rerunning pytest or commands that write caches, bytecode, or temporary files"
+                            "rerunning pytest or commands that write caches, bytecode, or temporary files; evaluate "
+                            "the proposed diff before the Controller commit without requiring a commit or clean worktree"
                         ),
                     },
                 }

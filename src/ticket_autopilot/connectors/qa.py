@@ -28,7 +28,11 @@ The Controller has already run every declared deterministic command and supplied
 its exit code, stdout, and stderr. Inspect that evidence independently, but do not \
 rerun pytest or any command that writes caches, bytecode, or temporary files. A \
 missing local virtual environment is not a blocker when the supplied Controller \
-evidence is complete and passing.
+evidence is complete and passing. This QA gate runs before the Controller commit: \
+ticket-attributable changed files and the absence of the final commit are expected \
+at this stage. Do not require a commit or clean worktree for QA PASS; verify the \
+proposed diff, and leave commit creation plus the final clean-worktree check to \
+the downstream Controller step.
 Reply with ONLY a qa-verdict JSON object with exactly these fields:
 schema_version ("1.0"), issue_key, run_id, qa_attempt (integer),
 verdict ("PASS"|"FAIL"|"BLOCKED"),

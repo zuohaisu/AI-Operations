@@ -206,7 +206,7 @@ class WebAgentLoop:
                     self._blocked(record, state, "deterministic checks did not produce eligible evidence", evidence, attempt)
                     return
                 changed_files = evidence.get("changed_files") or evidence.get("git", {}).get("changed_files", [])
-                self._event(record, stage="verification", role="controller", round=attempt, status="PASS", event_type="checks_completed", details={"checks": evidence.get("checks", []), "changed_files": changed_files})
+                self._event(record, stage="verification", role="controller", round=attempt, status="PASS", event_type="checks_completed", details={"checks": evidence.get("checks", []), "changed_files": changed_files, "provenance": evidence.get("provenance", {})})
                 if not self._safe_paths(changed_files):
                     self._blocked(record, state, "DIFF_SPLIT_REQUIRED: changed files are unsafe or not ticket-owned", evidence, attempt)
                     return
@@ -219,7 +219,7 @@ class WebAgentLoop:
                 self._save(record, state)
                 self._event(record, stage="qa", role="qa", round=attempt, status="RUNNING", event_type="agent_started", details={"changed_files": changed_files}, actor_type="qa_agent")
                 _, qa_prompt = self._prompts[run_id]
-                qa_input = {"ticket_spec": state["ticket_spec"], "prompt": qa_prompt, "run": asdict(record), "diff": diff, "changed_files": changed_files, "check_evidence": evidence.get("checks", []), "qa_attempt": attempt, "role": "qa", "permission_mode": "read-only"}
+                qa_input = {"ticket_spec": state["ticket_spec"], "prompt": qa_prompt, "run": asdict(record), "diff": diff, "changed_files": changed_files, "check_evidence": evidence.get("checks", []), "verification_evidence": evidence, "qa_attempt": attempt, "role": "qa", "permission_mode": "read-only"}
                 try:
                     raw = self.qa(**qa_input)
                 except Exception as exc:
@@ -236,7 +236,7 @@ class WebAgentLoop:
                     self._hard_break(record, state, "qa", "qa", attempt, "QA_EVIDENCE_MISMATCH" if not verdict_error else "QA_MALFORMED_OUTPUT", verdict_error or "QA verdict identity does not match this attempt")
                     return
                 state["qa_processes"].append(self._identity(raw, "qa", attempt))
-                attempt_record = {"qa_attempt": attempt, "input_hash": self._hash(qa_input), "findings": verdict["findings"], "changed_files": changed_files, "checks": evidence.get("checks", []), "verdict": verdict}
+                attempt_record = {"qa_attempt": attempt, "input_hash": self._hash(qa_input), "findings": verdict["findings"], "changed_files": changed_files, "checks": evidence.get("checks", []), "verification_provenance": evidence.get("provenance", {}), "verdict": verdict}
                 state["attempts"].append(attempt_record)
                 self._write_json(Path(record.artifact_dir) / f"qa-verdict-{attempt:02d}.json", verdict)
                 self._event(record, stage="qa", role="qa", round=attempt, status=verdict["verdict"], event_type="qa_verdict_recorded", artifact_refs=(f"qa-verdict-{attempt:02d}.json",), details={"findings": verdict["findings"], "changed_files": changed_files, "checks": evidence.get("checks", [])}, actor_type="qa_agent")

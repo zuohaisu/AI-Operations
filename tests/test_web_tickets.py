@@ -181,3 +181,4 @@ def test_qa_contract_reviews_controller_evidence_without_replaying_writeful_chec
     assert "Controller has already run every declared deterministic command" in QA_SYSTEM_PROMPT
     assert "do not rerun pytest" in QA_SYSTEM_PROMPT
     assert "missing local virtual environment is not a blocker" in QA_SYSTEM_PROMPT
+    assert "Do not require a commit or clean worktree for QA PASS" in QA_SYSTEM_PROMPT
