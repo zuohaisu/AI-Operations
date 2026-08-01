@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from ticket_autopilot.connectors import plane
-from ticket_autopilot.web import LocalConfig, TicketBoard, _bind_agent_inputs
+from ticket_autopilot.web import LocalConfig, TicketBoard, _bind_agent_inputs, _qa_python_environment
 
 
 def raw(state_group: str = "started", *, sequence: int = 18, identifier: str = "AIO") -> dict:
@@ -174,3 +174,17 @@ def test_agent_runtime_contract_replaces_source_checkout_with_owned_worktree(tmp
     assert str(source.resolve()) not in str(bound_spec)
     assert str(source.resolve()) not in bound_prompt
     assert str(worktree.resolve()) in bound_prompt
+
+
+def test_qa_gets_project_python_at_a_worktree_local_path(tmp_path: Path):
+    repository = tmp_path / "repository"
+    worktree = tmp_path / "worktree"
+    (repository / ".venv" / "bin").mkdir(parents=True)
+    (repository / ".venv" / "bin" / "python").write_text("python", encoding="utf-8")
+    worktree.mkdir()
+
+    with _qa_python_environment(repository, worktree) as python:
+        assert python == str(worktree / ".venv" / "bin" / "python")
+        assert (worktree / ".venv").is_symlink()
+
+    assert not (worktree / ".venv").exists()

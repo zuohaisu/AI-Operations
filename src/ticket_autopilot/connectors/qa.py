@@ -76,7 +76,7 @@ def _blocked_verdict(
 
 def run_qa(plan=None, result=None, ticket_context=None, agent=None,
            engine_root=None, *, ticket_spec=None, diff=None, test_evidence=None,
-           run_id=None, qa_attempt=None) -> dict:
+           run_id=None, qa_attempt=None, python_executable=None) -> dict:
     agent = agent or QA_AGENT
     engine_root = engine_root or _PKG_ROOT
     issue_key = (ticket_spec or {}).get("issue_key", "UNKNOWN")
@@ -91,6 +91,7 @@ def run_qa(plan=None, result=None, ticket_context=None, agent=None,
         "test_evidence": test_evidence,
         "run_id": effective_run_id,
         "qa_attempt": effective_attempt,
+        "python_executable": python_executable,
         "plan": plan,
         "result": result,
     }
