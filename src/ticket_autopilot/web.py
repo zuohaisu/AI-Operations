@@ -669,7 +669,11 @@ class TicketBoard:
         )}
 
     def _detail(self, item: dict[str, Any]) -> dict[str, Any]:
-        preflight = preflight_plane_issue(item)
+        # Owner-approved relaxed intake: nine-field template tickets may omit
+        # operational parameters, which default from local configuration.
+        preflight = preflight_plane_issue(item, defaults={
+            "repository": self.settings.load(redacted=True).get("repository") or "",
+        })
         readiness = readiness_errors(item) if preflight["status"] == "READY" else []
         unfinished = plane.is_unfinished_work_item(item)
         project_matches = self._project_matches(item)

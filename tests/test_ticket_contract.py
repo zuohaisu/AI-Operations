@@ -213,3 +213,121 @@ def test_connector_backed_preflight_reuses_aio8_fetch_issue_without_reimplementi
     )
     source = ticket_contract.__file__
     assert "urllib" not in open(source, encoding="utf-8").read()
+
+
+# --- Owner-approved relaxed intake for the agent-ready nine-field template ---
+
+TEMPLATE_DESCRIPTION = """## 1. Title
+
+Recover orphaned PREPARING prompt records so Prepare never deadlocks
+
+## 2. Goal (why)
+
+A crashed service leaves prompt-metadata.json stuck in PREPARING forever.
+
+## 3. Scope boundary
+
+- In scope:
+- `PromptResolver.prepare()` records `owner_pid` in each record.
+- Out of scope (explicit non-goals):
+- No changes to `WebAgentLoop` or `state.json` handling.
+
+## 4. Acceptance criteria
+
+- [ ] AC-1: Given a dead owner, when has_active_run runs, then it returns False.
+- [ ] AC-2: Given a live owner, when has_active_run runs, then it returns True.
+
+## 5. Verification method (the deterministic gate)
+
+- Type: command
+- Command or procedure: `python3 -m pytest tests/ -q`
+- Pass: full suite green; exit code 0.
+- Fail: any red test enters the bounded fix loop.
+
+## 6. Dependencies
+
+- None.
+
+## 7. Definition of Done
+
+- [ ] Acceptance criteria met
+
+## 8. Risk & rollback
+
+- Risk: PID reuse. Rollback: single git revert.
+
+## 9. Human touchpoints
+
+- Trigger: repository owner moves the issue to In Progress.
+"""
+
+_TEMPLATE_DEFAULTS = {"repository": "zuohaisu/AI-Operations"}
+
+
+def template_issue(**overrides):
+    issue = valid_issue(description=TEMPLATE_DESCRIPTION, identifier="AIO-26")
+    issue.update(overrides)
+    return issue
+
+
+def test_template_ticket_is_ready_with_owner_approved_defaults():
+    result = ticket_contract.preflight_plane_issue(template_issue(), defaults=_TEMPLATE_DEFAULTS)
+
+    assert result["status"] == "READY"
+    spec = result["ticket_spec"]
+    assert ticket_contract.validate_ticket_spec(spec) == (True, [])
+    # Scope values still come from the ticket text, never from defaults.
+    assert "records `owner_pid`" in spec["scope"]
+    assert "No changes to `WebAgentLoop`" in spec["out_of_scope"]
+    assert spec["provenance"]["out_of_scope"] == "description#Scope boundary>Out of scope"
+    # Operational parameters follow the owner-approved deterministic defaults.
+    assert spec["risk_tier"] == "R1"
+    assert spec["repository"] == "zuohaisu/AI-Operations"
+    assert spec["provenance"]["repository"] == "config#repository"
+    assert spec["required_checks"] == ["python3 -m pytest tests/ -q"]
+    assert spec["constraints"] == {"max_fix_attempts": 3, "allow_main_push": False}
+    # The single deterministic gate expands to every acceptance criterion.
+    assert [entry["acceptance_criterion_id"] for entry in spec["verification"]] == ["AC-1", "AC-2"]
+    assert all(entry["command"] == "python3 -m pytest tests/ -q" for entry in spec["verification"])
+
+
+def test_template_ticket_stays_blocked_without_defaults():
+    result = ticket_contract.preflight_plane_issue(template_issue())
+
+    # The strict path still blocks; the first missing field is the risk tier,
+    # which by existing semantics is a human decision, not a requirements gap.
+    assert result["status"] == "BLOCKED_NEEDS_HUMAN"
+    assert result["ticket_spec"] is None
+    assert result["errors"][0]["field"] == "risk_tier"
+
+
+def test_explicit_sections_still_win_over_defaults():
+    # A fully explicit machine-contract ticket keeps its own values untouched.
+    result = ticket_contract.preflight_plane_issue(valid_issue(), defaults=_TEMPLATE_DEFAULTS)
+
+    assert result["status"] == "READY"
+    spec = result["ticket_spec"]
+    assert spec["risk_tier"] == "R1"
+    assert spec["constraints"] == {"max_fix_attempts": 2, "allow_main_push": False}
+    assert spec["provenance"]["repository"] == "description#Repository"
+
+
+def test_template_manual_gate_is_still_blocked_under_defaults():
+    description = TEMPLATE_DESCRIPTION.replace("- Type: command", "- Type: manual")
+    result = ticket_contract.preflight_plane_issue(
+        template_issue(description=description), defaults=_TEMPLATE_DEFAULTS
+    )
+
+    assert result["status"] == "BLOCKED_REQUIREMENTS"
+    assert result["errors"][0]["code"] == "MANUAL_VERIFICATION"
+
+
+def test_template_without_any_command_is_blocked_under_defaults():
+    description = TEMPLATE_DESCRIPTION.replace("- Command or procedure: `python3 -m pytest tests/ -q`\n", "")
+    result = ticket_contract.preflight_plane_issue(
+        template_issue(description=description), defaults=_TEMPLATE_DEFAULTS
+    )
+
+    assert result["status"] == "BLOCKED_REQUIREMENTS"
+    assert result["errors"][0]["field"] == "verification"
+

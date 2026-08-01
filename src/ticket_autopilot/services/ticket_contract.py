@@ -276,11 +276,69 @@ def _cancelled(issue: dict[str, Any]) -> bool:
     return any(value is not None and str(value).casefold() in {"cancelled", "canceled"} for value in values)
 
 
-def map_plane_issue(issue: dict[str, Any]) -> dict[str, Any]:
+def _extract_embedded_out_of_scope(scope_body: str) -> tuple[str, str] | None:
+    """Split a Scope-boundary body at an explicit ``Out of scope`` label line.
+
+    The agent-ready template nests the non-goal list inside ``## Scope boundary``
+    as a labelled bullet rather than an own heading.  The split is purely
+    textual: it only fires when the label literally appears in the ticket.
+    """
+    lines = scope_body.splitlines()
+    for index, line in enumerate(lines):
+        label = re.sub(r"^\s*[-*]\s+", "", line)
+        if _SECTION_ALIASES.get(_normalise_heading(label)) == "out_of_scope":
+            scope = "\n".join(lines[:index]).strip()
+            out_of_scope = "\n".join(lines[index + 1:]).strip()
+            if scope and out_of_scope:
+                return scope, out_of_scope
+    return None
+
+
+def _single_gate_verification(body: str, criteria: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Expand the template's single deterministic gate to every criterion.
+
+    The agent-ready template states one ``Type`` / ``Command or procedure`` gate
+    for the whole ticket; applying that exact command to each acceptance
+    criterion is a deterministic expansion, not an inference.
+    """
+    gate_type = "automated"
+    command = ""
+    for line in _bullet_values(body):
+        type_match = re.match(r"(?i)type\s*[:=]\s*(.+)$", line)
+        if type_match:
+            raw_type = _plain(type_match.group(1)).casefold()
+            for known in ("manual", "inspection", "query"):
+                if known in raw_type:
+                    gate_type = known
+                    break
+            continue
+        command_match = re.match(r"(?i)command(?:\s+or\s+procedure)?\s*[:=]\s*(.+)$", line)
+        if command_match and not command:
+            command = _first_code_or_text(command_match.group(1))
+    if not command:
+        code = re.search(r"`([^`\n]+)`", body)
+        command = code.group(1).strip() if code else ""
+    if not command:
+        raise TicketContractError(
+            "verification requires AC-<number>: <type>: <command> entries", field="verification"
+        )
+    return [
+        {"acceptance_criterion_id": criterion["id"], "type": gate_type, "command": command}
+        for criterion in criteria
+    ]
+
+
+def map_plane_issue(issue: dict[str, Any], *, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
     """Mechanically map an explicitly structured Plane issue to ticket-spec v1.0.
 
-    No values are inferred: every contract field comes from the issue description,
-    and ``source_issue`` plus ``provenance`` retain its exact source locations.
+    No scope values are inferred: goal, scope, non-goals, acceptance criteria,
+    and the verification gate always come from the issue description, and
+    ``source_issue`` plus ``provenance`` retain their exact source locations.
+    When ``defaults`` is provided (owner-approved relaxed intake for the
+    agent-ready nine-field template), only the missing operational parameters
+    are filled deterministically: repository from configuration, risk tier R1,
+    required checks derived from the ticket's own verification commands, and
+    the safe constraints ``max_fix_attempts=3`` / ``allow_main_push=false``.
     """
     if not isinstance(issue, dict):
         raise TicketContractError("Plane issue payload is not an object")
@@ -302,25 +360,64 @@ def map_plane_issue(issue: dict[str, Any]) -> dict[str, Any]:
         raise TicketContractError("Plane issue has no title", field="source_issue.title")
 
     sections = _sections(description)
+    relaxed = defaults is not None
+    provenance_overrides: dict[str, str] = {}
+    source = str(issue.get("_description_provenance") or "description")
+    if "out_of_scope" not in sections and "scope" in sections:
+        embedded = _extract_embedded_out_of_scope(sections["scope"])
+        if embedded:
+            sections["scope"], sections["out_of_scope"] = embedded
+            provenance_overrides["out_of_scope"] = f"{source}#Scope boundary>Out of scope"
     goal = _nonempty_section(sections, "goal")
     scope = _nonempty_section(sections, "scope")
     out_of_scope = _nonempty_section(sections, "out_of_scope")
-    risk_source = _plain(_nonempty_section(sections, "risk_tier")).upper()
-    risk_match = re.search(r"\bR[0-9]\b", risk_source)
-    if not risk_match:
-        raise TicketContractError("risk tier must be R0, R1, R2, or R3", code="UNKNOWN_RISK_TIER", field="risk_tier")
-    risk_tier = risk_match.group(0)
-    if risk_tier not in {"R0", "R1", "R2", "R3"}:
-        raise TicketContractError("risk tier must be R0, R1, R2, or R3", code="UNKNOWN_RISK_TIER", field="risk_tier")
+    if relaxed and "risk_tier" not in sections:
+        # Owner-approved default: a template ticket without an explicit tier
+        # runs as R1; higher tiers must still be declared to block automation.
+        risk_tier = "R1"
+        provenance_overrides["risk_tier"] = "default#risk_tier"
+    else:
+        risk_source = _plain(_nonempty_section(sections, "risk_tier")).upper()
+        risk_match = re.search(r"\bR[0-9]\b", risk_source)
+        if not risk_match:
+            raise TicketContractError("risk tier must be R0, R1, R2, or R3", code="UNKNOWN_RISK_TIER", field="risk_tier")
+        risk_tier = risk_match.group(0)
+        if risk_tier not in {"R0", "R1", "R2", "R3"}:
+            raise TicketContractError("risk tier must be R0, R1, R2, or R3", code="UNKNOWN_RISK_TIER", field="risk_tier")
     acceptance_criteria = _parse_acceptance_criteria(_nonempty_section(sections, "acceptance_criteria"))
-    verification = _parse_verification(_nonempty_section(sections, "verification"))
-    repository = _first_code_or_text(_nonempty_section(sections, "repository"))
-    required_checks = [_first_code_or_text(value) for value in _bullet_values(
-        _nonempty_section(sections, "required_checks")
-    )]
-    if not required_checks:
-        raise TicketContractError("required_checks requires at least one bullet", field="required_checks")
-    constraints = _parse_constraints(_nonempty_section(sections, "constraints"))
+    verification_body = _nonempty_section(sections, "verification")
+    try:
+        verification = _parse_verification(verification_body)
+    except TicketContractError as error:
+        if not (relaxed and "requires AC-" in str(error)):
+            raise
+        verification = _single_gate_verification(verification_body, acceptance_criteria)
+        provenance_overrides["verification"] = f"{source}#Verification (single gate)"
+    if relaxed and "repository" not in sections:
+        repository = str(defaults.get("repository") or "").strip()
+        if not repository:
+            raise TicketContractError("missing required section: repository", field="repository")
+        provenance_overrides["repository"] = "config#repository"
+    else:
+        repository = _first_code_or_text(_nonempty_section(sections, "repository"))
+    if relaxed and "required_checks" not in sections:
+        # Derive from every gate command so a manual-typed gate still reaches
+        # the clearer MANUAL_VERIFICATION block instead of a bullet-count error.
+        required_checks = list(dict.fromkeys(entry["command"] for entry in verification))
+        if not required_checks:
+            raise TicketContractError("required_checks requires at least one bullet", field="required_checks")
+        provenance_overrides["required_checks"] = f"{source}#Verification"
+    else:
+        required_checks = [_first_code_or_text(value) for value in _bullet_values(
+            _nonempty_section(sections, "required_checks")
+        )]
+        if not required_checks:
+            raise TicketContractError("required_checks requires at least one bullet", field="required_checks")
+    if relaxed and "constraints" not in sections:
+        constraints = {"max_fix_attempts": 3, "allow_main_push": False}
+        provenance_overrides["constraints"] = "default#constraints"
+    else:
+        constraints = _parse_constraints(_nonempty_section(sections, "constraints"))
 
     criterion_ids = {criterion["id"] for criterion in acceptance_criteria}
     verification_ids = {entry["acceptance_criterion_id"] for entry in verification}
@@ -329,7 +426,6 @@ def map_plane_issue(issue: dict[str, Any]) -> dict[str, Any]:
             "every acceptance criterion must have exactly one verification entry", field="verification"
         )
 
-    source = str(issue.get("_description_provenance") or "description")
     source_issue = {
         "provider": "plane", "id": str(issue_id), "key": _issue_key(issue),
         "title": title, "description": description,
@@ -349,7 +445,7 @@ def map_plane_issue(issue: dict[str, Any]) -> dict[str, Any]:
         "repository": repository,
         "required_checks": required_checks,
         "constraints": constraints,
-        "provenance": {
+        "provenance": {**{
             "goal": f"{source}#Goal",
             "scope": f"{source}#Scope",
             "out_of_scope": f"{source}#Out-of-scope",
@@ -359,7 +455,7 @@ def map_plane_issue(issue: dict[str, Any]) -> dict[str, Any]:
             "repository": f"{source}#Repository",
             "required_checks": f"{source}#Required Checks",
             "constraints": f"{source}#Constraints",
-        },
+        }, **provenance_overrides},
     }
 
 
@@ -395,7 +491,7 @@ def readiness_errors(issue: dict[str, Any]) -> list[str]:
     return [f"missing ticket readiness evidence: {name}" for name in missing]
 
 
-def preflight_plane_issue(issue: dict[str, Any]) -> dict[str, Any]:
+def preflight_plane_issue(issue: dict[str, Any], *, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
     """Validate a Plane issue without spawning Planner, Executor, or QA Agents."""
     if not isinstance(issue, dict):
         return _blocked("BLOCKED_REQUIREMENTS", TicketContractError("Plane issue payload is not an object"))
@@ -404,7 +500,7 @@ def preflight_plane_issue(issue: dict[str, Any]) -> dict[str, Any]:
             "Plane issue is cancelled and cannot enter development", code="ISSUE_CANCELLED", field="state"
         ))
     try:
-        ticket_spec = map_plane_issue(issue)
+        ticket_spec = map_plane_issue(issue, defaults=defaults)
     except TicketContractError as error:
         # Ambiguous/unknown v2 source semantics need a PM decision; incomplete
         # contract fields are requirements failures before any Agent is invoked.
