@@ -4,15 +4,23 @@ This module never starts Developer or QA.  Existing canonical task Prompts are
 copied byte-for-byte; Planner-generated Prompts are written to their canonical
 ``tasks/`` files (where the Run step reads them) and mirrored into the owned Run
 artifact for provenance.
+
+A ``PREPARING`` prompt artifact blocks single-flight only while its recorded
+owner PID is alive.  A dead owner, or a legacy artifact without a valid owner
+PID whose mtime is older than 30 minutes, is finalized in place as
+``HARD_BREAK_PLANNER`` before scanning continues.  ``state.json`` active-state
+handling is independent and unchanged.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import re
 import secrets
+import time
 from typing import Any, Callable
 
 from ticket_autopilot.services.delivery_policy import HUMAN_VISUAL_REVIEW_PENDING
@@ -21,6 +29,7 @@ from ticket_autopilot.services.delivery_policy import HUMAN_VISUAL_REVIEW_PENDIN
 _ISSUE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9_]*)-([1-9][0-9]*)$")
 _ROLES = ("dev", "acceptance")
 _ACTIVE_STATES = frozenset({"ACTIVE", "PREPARING", "DEVELOPING", "VERIFYING", "QA_RUNNING"})
+_STALE_PREPARING_SECONDS = 30 * 60
 
 
 class PromptPreparationError(RuntimeError):
@@ -75,8 +84,15 @@ class PromptResolver:
                 metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            if metadata.get("status") == "PREPARING":
-                return True
+            if metadata.get("status") != "PREPARING":
+                continue
+            if self._preparing_is_orphaned(metadata_path, metadata):
+                metadata["status"] = "HARD_BREAK_PLANNER"
+                metadata["planner_outcome"] = "failed"
+                metadata["hard_break_reason"] = "orphan recovery: PREPARING owner is no longer active"
+                self._write_json(metadata_path, metadata)
+                continue
+            return True
         return False
 
     def prepare(
@@ -96,6 +112,7 @@ class PromptResolver:
         artifact_dir = self._create_artifact_dir(issue_key)
         metadata: dict[str, Any] = {
             "schema_version": "1.0", "issue_key": issue_key, "status": "PREPARING",
+            "owner_pid": os.getpid(), "created_at": datetime.now(timezone.utc).isoformat(),
             "planner_outcome": "not_needed" if not missing else "pending", "hard_break_reason": None,
             "visual_evidence": {
                 "status": HUMAN_VISUAL_REVIEW_PENDING,
@@ -168,6 +185,26 @@ class PromptResolver:
                 metadata["planner_profile"] = {key: str(value) for key, value in profile.items()}
         self._write_json(artifact_dir / "prompt-metadata.json", metadata)
         return {**metadata, "artifact_dir": str(artifact_dir.relative_to(self.repository))}
+
+    @staticmethod
+    def _preparing_is_orphaned(metadata_path: Path, metadata: dict[str, Any]) -> bool:
+        owner_pid = metadata.get("owner_pid")
+        if isinstance(owner_pid, int) and not isinstance(owner_pid, bool) and owner_pid > 0:
+            try:
+                os.kill(owner_pid, 0)
+            except ProcessLookupError:
+                return True
+            except PermissionError:
+                return False
+            except OSError:
+                # An inconclusive liveness check must not turn a live owner
+                # into an orphan and weaken single-flight safety.
+                return False
+            return False
+        try:
+            return time.time() - metadata_path.stat().st_mtime > _STALE_PREPARING_SECONDS
+        except OSError:
+            return False
 
     def _create_artifact_dir(self, issue_key: str) -> Path:
         self.artifacts_root.mkdir(parents=True, exist_ok=True)
