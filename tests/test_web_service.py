@@ -8,6 +8,7 @@ import socket
 import subprocess
 import threading
 from http.server import ThreadingHTTPServer
+from unittest import mock
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -56,6 +57,22 @@ def test_start_is_detached_healthy_and_single_instance(service: tuple[ServiceMan
     assert manager.stop() == 0
     assert manager.status() == 1
     assert manager.log_path.exists()
+
+
+def test_service_id_beginning_with_dash_is_passed_as_one_option_value(tmp_path: Path) -> None:
+    manager = ServiceManager(
+        home=tmp_path / ".ticket-autopilot", port=_free_port(), project_root=Path.cwd(),
+        browser_opener=lambda _url: None,
+    )
+    try:
+        with mock.patch("ticket_autopilot.web.secrets.token_urlsafe", return_value="-leading-dash-service-id-value"):
+            assert manager.start(open_browser=False) == 0
+        record = json.loads(manager.service_path.read_text())
+        assert record["service_id"].startswith("-")
+        with urlopen(f"http://{HOST}:{manager.port}/api/health", timeout=1) as response:
+            assert json.loads(response.read())["service_id"] == record["service_id"]
+    finally:
+        manager.stop()
 
 
 def test_stale_record_recovers_but_foreign_listener_is_never_stopped(tmp_path: Path) -> None:

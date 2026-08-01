@@ -248,7 +248,7 @@ class ServiceManager:
         self._prepare_log()
         command = [
             sys.executable, "-m", "ticket_autopilot.web", "server",
-            "--port", str(self.port), "--service-id", service_id,
+            "--port", str(self.port), f"--service-id={service_id}",
             "--home", str(self.home),
         ]
         try:
@@ -477,24 +477,64 @@ class TicketBoard:
         return {**prepared, "developer_calls": 0, "qa_calls": 0}
 
     def run(self, issue_id: str) -> dict[str, Any]:
-        """Start a prepared Web Run and return its id before Agent work begins."""
+        """Prepare missing Prompts, then start one Web Run from a single action."""
         item = plane.fetch_issue(issue_id, **self._plane_options())
         detail = self._detail(item)
         if not detail["eligible"]:
             return {"status": "BLOCKED_REQUIREMENTS", "reason": detail["reason"], "run_id": None,
                     "developer_calls": 0, "qa_calls": 0}
-        paths = PromptResolver(self.repository).canonical_paths(detail["identifier"])
+        resolver = PromptResolver(self.repository)
+        paths = resolver.canonical_paths(detail["identifier"])
+        prepared: dict[str, Any] | None = None
         try:
             developer_prompt = paths["dev"].read_text(encoding="utf-8")
             qa_prompt = paths["acceptance"].read_text(encoding="utf-8")
         except OSError:
-            return {"status": "BLOCKED_REQUIREMENTS", "reason": "Run requires prepared Developer and QA Prompts",
-                    "run_id": None, "developer_calls": 0, "qa_calls": 0}
+            try:
+                prepared = resolver.prepare(
+                    issue_key=item["identifier"], ticket_spec=detail["ticket_spec"],
+                    source_issue=item, planner=self.planner,
+                )
+            except PromptPreparationError as exc:
+                return {"status": "BLOCKED_REQUIREMENTS", "reason": str(exc), "run_id": None,
+                        "developer_calls": 0, "qa_calls": 0}
+            if prepared.get("status") != "READY":
+                return {
+                    "status": str(prepared.get("status") or "HARD_BREAK_PLANNER"),
+                    "reason": str(prepared.get("hard_break_reason") or "Planner did not prepare runnable Prompts"),
+                    "artifact_dir": prepared.get("artifact_dir"), "run_id": None,
+                    "developer_calls": 0, "qa_calls": 0,
+                }
+            artifact_dir = self.repository / str(prepared["artifact_dir"])
+            try:
+                developer_prompt = (artifact_dir / "dev-prompt.md").read_text(encoding="utf-8")
+                qa_prompt = (artifact_dir / "acceptance-prompt.md").read_text(encoding="utf-8")
+            except OSError as exc:
+                return {"status": "HARD_BREAK_PLANNER", "reason": f"prepared Prompt artifact is unavailable: {exc}",
+                        "artifact_dir": prepared.get("artifact_dir"), "run_id": None,
+                        "developer_calls": 0, "qa_calls": 0}
+
+        if prepared is None:
+            prompt_sources = {
+                role: {"source": "existing_file", "canonical_path": str(path.relative_to(self.repository))}
+                for role, path in paths.items()
+            }
+        else:
+            prompt_sources = prepared["prompts"]
         try:
             loop = self.web_loop_factory(settings=self.settings, repository=self.repository)
-            result = loop.start(detail["ticket_spec"], developer_prompt=developer_prompt, qa_prompt=qa_prompt)
+            result = loop.start(
+                detail["ticket_spec"], developer_prompt=developer_prompt, qa_prompt=qa_prompt,
+                prompt_sources=prompt_sources,
+            )
             if result.get("run_id"):
                 self._web_loops[str(result["run_id"])] = loop
+            if prepared is not None:
+                result["preparation"] = {
+                    "status": prepared["status"], "artifact_dir": prepared["artifact_dir"],
+                    "planner_outcome": prepared["planner_outcome"],
+                    "planner_attempts": prepared.get("planner_attempts", 0),
+                }
             return result
         except WebAgentLoopError as exc:
             return {"status": "BLOCKED_REQUIREMENTS", "reason": str(exc), "run_id": None,

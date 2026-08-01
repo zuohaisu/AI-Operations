@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import unittest
 from unittest import mock
@@ -100,6 +101,7 @@ class TestCliDriver(unittest.TestCase):
         self.assertEqual(command[command.index("--allowedTools") + 1], "Read,Glob")
         self.assertIn("--append-system-prompt", command)
         self.assertEqual(run.call_args.kwargs["cwd"], os.path.join(PKG_ROOT, "sandbox"))
+        self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
 
     @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
     def test_translates_write_mode_to_each_clis_real_flag_value(self, run):

@@ -10,7 +10,7 @@ pipeline documents are not evidence that a Web capability is live.
 The user starts a localhost-only service with:
 
 ```bash
-python -m ticket_autopilot.web start
+./start-ticket-autopilot
 ```
 
 The service listens only on `127.0.0.1:8765`. The user supplies local Plane,
@@ -28,7 +28,7 @@ the service restarts.
 | Stage | Current implementation | Evidence gate |
 | --- | --- | --- |
 | 1. Ticket intake and contract | `connectors/plane.py`, `services/ticket_contract.py`, and `/api/tickets` list unfinished Plane work items and normalize Plane v2 fields. | Expanded Project matches local configuration; required structured sections parse into a schema-valid R0/R1 `ticket-spec`. |
-| 2. Prompt preparation | `services/prompt_resolver.py` and `/api/tickets/<id>/prepare` reuse exact `tasks/AIO-NNN-*` Prompts or call the configured Planner only for missing roles. | Both Developer and Acceptance Prompts are retained in a Run-owned artifact; Planner failure is a Hard Break and starts no Developer/QA. |
+| 2. Prompt preparation | `services/prompt_resolver.py` and `/api/tickets/<id>/run` reuse exact `tasks/AIO-NNN-*` Prompts or call the configured Planner automatically for missing roles. `/prepare` remains an optional advanced action. Structurally invalid Planner output receives one bounded feedback repair attempt. | Both Developer and Acceptance Prompts are retained in a Run-owned artifact; Planner failure is shown with its artifact path and starts no Developer/QA. |
 | 3. Development invocation | `services/web_agent_loop.py` creates an owned Worktree/branch, then invokes the configured Developer in that Worktree. | A run ID, Worktree, branch, base SHA and append-only event exist before background work begins. |
 | 4. Deterministic verification and independent QA | Controller runs the Ticket's automated/query verification and required checks, then invokes QA with the Ticket, complete Diff, changed files and check evidence. | All checks exit 0, Diff is nonempty and safe, and QA returns a schema-valid verdict tied to the same run and attempt. |
 | 5. Bounded fix loop | QA FAIL provides the original findings to the next Developer invocation; each QA is a fresh attempt. | QA attempt is in `1..5`; fifth FAIL becomes `QA_EXHAUSTED` with no further Developer or Commit call. |
@@ -40,7 +40,8 @@ the service restarts.
 ```text
 Plane Ticket
   → readiness gate
-  → existing Prompt or Planner preparation
+  → one Run action
+  → existing Prompt or automatic Planner preparation
   → owned Worktree / feature branch
   → Developer → checks → independent QA
   → up to four findings-only fixes and re-QA
@@ -68,17 +69,17 @@ Canonical delivery evidence includes `QA_PENDING`,
 `MERGE_AUTHORIZED_BY_USER` and `TECHNICAL_BLOCKED`. An override never changes a
 failed or pending QA/visual event into PASS.
 
-## Explicit exclusions and known limitation
+## Explicit exclusions and known limitations
 
 Phase 1 excludes remote access, multiple users, webhooks, automatic Ticket
 selection, parallel Runs, arbitrary resume, automatic Push/PR/Merge/deploy and
 Plane writeback.
 
-The service lifecycle has one known defect: a randomly generated `service_id`
-can begin with `-`, which the child CLI may parse as an option rather than a
-value. The result is an intermittent startup health-check timeout. This is a
-release blocker for the "single-command stable startup" claim and must be fixed
-before treating the local Web entrypoint as production-ready.
+Agent CLI subprocesses detach stdin so a background Web Run cannot suspend on
+terminal input. The service passes its random identity as one option value even
+when it begins with `-`. Stop remains conservative: it terminates an Agent only
+when an owned process group has been registered and otherwise asks for human
+intervention rather than signaling an unverified PID.
 
 ## Deterministic verification
 

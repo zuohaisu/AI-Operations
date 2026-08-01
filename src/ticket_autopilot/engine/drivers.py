@@ -244,7 +244,13 @@ def cli_call(agent: dict, inputs: dict, node: dict, engine_root: str,
             cmd += ["--append-system-prompt", system]
         cmd += agent.get("extra_args", [])
 
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=600)
+    # The Web service is detached from the launching shell.  Never let an Agent
+    # CLI inherit a terminal and suspend the Run with SIGTTIN while attempting
+    # to read stdin; the complete request is already present in ``cmd``.
+    proc = subprocess.run(
+        cmd, cwd=cwd, capture_output=True, text=True, timeout=600,
+        stdin=subprocess.DEVNULL,
+    )
     if proc.returncode != 0:
         raise RuntimeError(
             f"cli driver ({cmd[0]}) exited {proc.returncode}: {proc.stderr}"

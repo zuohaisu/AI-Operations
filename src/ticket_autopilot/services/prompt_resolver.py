@@ -5,6 +5,10 @@ copied byte-for-byte; Planner-generated Prompts are written to their canonical
 ``tasks/`` files (where the Run step reads them) and mirrored into the owned Run
 artifact for provenance.
 
+Planner output receives one bounded repair attempt when it is structurally
+invalid.  The second request includes only the deterministic validation error;
+operational CLI failures are not retried or disguised as output problems.
+
 A ``PREPARING`` prompt artifact blocks single-flight only while its recorded
 owner PID is alive.  A dead owner, or a legacy artifact without a valid owner
 PID whose mtime is older than 30 minutes, is finalized in place as
@@ -30,6 +34,7 @@ _ISSUE_KEY = re.compile(r"^([A-Za-z][A-Za-z0-9_]*)-([1-9][0-9]*)$")
 _ROLES = ("dev", "acceptance")
 _ACTIVE_STATES = frozenset({"ACTIVE", "PREPARING", "DEVELOPING", "VERIFYING", "QA_RUNNING"})
 _STALE_PREPARING_SECONDS = 30 * 60
+_MAX_PLANNER_ATTEMPTS = 2
 
 
 class PromptPreparationError(RuntimeError):
@@ -103,7 +108,7 @@ class PromptResolver:
         source_issue: dict[str, Any],
         planner: Callable[..., dict[str, str]] | None,
     ) -> dict[str, Any]:
-        """Copy existing Prompts and call Planner exactly once for missing roles."""
+        """Copy existing Prompts and prepare missing roles with bounded repair."""
         if self.has_active_run():
             raise PromptPreparationError("an owned Run is already active")
         paths = self.canonical_paths(issue_key)
@@ -114,6 +119,7 @@ class PromptResolver:
             "schema_version": "1.0", "issue_key": issue_key, "status": "PREPARING",
             "owner_pid": os.getpid(), "created_at": datetime.now(timezone.utc).isoformat(),
             "planner_outcome": "not_needed" if not missing else "pending", "hard_break_reason": None,
+            "planner_attempts": 0,
             "visual_evidence": {
                 "status": HUMAN_VISUAL_REVIEW_PENDING,
                 "reason": "review ticket list, detail, Prompt sources, and Planner hard break in a browser",
@@ -141,12 +147,32 @@ class PromptResolver:
                         "acceptance": "immediate action envelope, independent QA boundary, diff attribution, conditional visual gate",
                     },
                 }
-                candidate = planner(context=context, missing_roles=tuple(missing))
-                if not isinstance(candidate, dict):
-                    raise PromptPreparationError("Planner returned a non-object result")
-                generated = {role: candidate.get(role, "") for role in missing}
-                for role, content in generated.items():
-                    self._validate_generated(role, content, issue_key, ticket_spec["repository"])
+                last_validation_error = ""
+                for attempt in range(1, _MAX_PLANNER_ATTEMPTS + 1):
+                    attempt_context = dict(context)
+                    if last_validation_error:
+                        attempt_context["repair"] = {
+                            "attempt": attempt,
+                            "validation_error": last_validation_error,
+                            "instruction": "Return a corrected complete JSON object for every requested role.",
+                        }
+                    candidate = planner(context=attempt_context, missing_roles=tuple(missing))
+                    metadata["planner_attempts"] = attempt
+                    self._write_json(artifact_dir / "prompt-metadata.json", metadata)
+                    try:
+                        if not isinstance(candidate, dict):
+                            raise PromptPreparationError("Planner returned a non-object result")
+                        generated = {role: candidate.get(role, "") for role in missing}
+                        for role, content in generated.items():
+                            self._validate_generated(role, content, issue_key, ticket_spec["repository"])
+                    except PromptPreparationError as exc:
+                        last_validation_error = str(exc)
+                        if attempt < _MAX_PLANNER_ATTEMPTS:
+                            continue
+                        raise PromptPreparationError(
+                            f"Planner output invalid after {_MAX_PLANNER_ATTEMPTS} attempts: {last_validation_error}"
+                        ) from exc
+                    break
                 metadata["planner_outcome"] = "generated"
 
             for role in _ROLES:
