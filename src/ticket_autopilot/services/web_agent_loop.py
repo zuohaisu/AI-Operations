@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from ticket_autopilot.schemas.qa_verdict import validate_verdict
 from ticket_autopilot.services.delivery_policy import require_user_authorization
+from ticket_autopilot.services.process_output import ProcessOutputStore
 from ticket_autopilot.services.run_events import redact
 from ticket_autopilot.services.run_manager import RunManager, RunRecord
 
@@ -101,7 +102,14 @@ class WebAgentLoop:
     def timeline(self, run_id: str) -> dict[str, Any]:
         record = self.run_manager.load_run(run_id)
         snapshot = self._load(record)
-        return {"run_id": record.run_id, "snapshot": redact(snapshot, self.known_secrets), "events": self.run_manager.events(record)}
+        return {
+            "run_id": record.run_id,
+            "snapshot": redact(snapshot, self.known_secrets),
+            "events": self.run_manager.events(record),
+            "process_output": ProcessOutputStore(
+                record.artifact_dir, known_secrets=self.known_secrets,
+            ).read(),
+        }
 
     def register_owned_process_group(self, run_id: str, *, pid: int, process_group: int) -> None:
         """Register only a controller-created child after PID/group verification."""
@@ -179,7 +187,7 @@ class WebAgentLoop:
                 self._event(record, stage="development", role="developer", round=attempt, status="RUNNING", event_type="agent_started", details={"worktree": record.worktree}, actor_type="developer_agent")
                 developer_prompt, _ = self._prompts[run_id]
                 try:
-                    output = self.developer(ticket_spec=state["ticket_spec"], prompt=developer_prompt, run=asdict(record), findings=state.get("findings"), role="developer", permission_mode="write")
+                    output = self.developer(ticket_spec=state["ticket_spec"], prompt=developer_prompt, run=asdict(record), findings=state.get("findings"), qa_attempt=attempt, role="developer", permission_mode="write")
                 except Exception as exc:
                     self._hard_break(record, state, "development", "developer", attempt, "DEVELOPER_PROCESS_FAILED", exc)
                     return
@@ -260,7 +268,10 @@ class WebAgentLoop:
     def _commit(self, record: RunRecord, ticket_spec: dict[str, Any], changed_files: list[str]) -> dict[str, str] | str:
         if not changed_files or not self._safe_paths(changed_files): return "BLOCKED_NEEDS_HUMAN: no safe ticket-owned files to commit"
         worktree = Path(record.worktree)
+        output = ProcessOutputStore(record.artifact_dir, known_secrets=self.known_secrets)
         try:
+            output.append(stage="commit", role="controller", stream="process",
+                          message=f"staging {len(changed_files)} ticket-owned path(s)", round=int(ticket_spec.get("qa_attempt") or 0))
             result = self.git_runner(["git", "add", "--", *changed_files], cwd=worktree, capture_output=True, text=True, check=False)
             if result.returncode: return f"TECHNICAL_BLOCKED: git add failed: {result.stderr.strip()}"
             staged = self.git_runner(["git", "diff", "--cached", "--name-only"], cwd=worktree, capture_output=True, text=True, check=False)
@@ -268,6 +279,8 @@ class WebAgentLoop:
             if staged.returncode or set(staged_files) != set(changed_files): return "DIFF_SPLIT_REQUIRED: staged files differ from ticket-owned changed files"
             commit = self.git_runner(["git", "commit", "-m", f"{record.issue_key}: verified Web Run"], cwd=worktree, capture_output=True, text=True, check=False)
             if commit.returncode: return f"TECHNICAL_BLOCKED: git commit failed: {commit.stderr.strip()}"
+            output.append(stage="commit", role="controller", stream="stdout",
+                          message=commit.stdout or "git commit completed", round=0)
             sha = self.git_runner(["git", "rev-parse", "HEAD"], cwd=worktree, capture_output=True, text=True, check=False)
             return "TECHNICAL_BLOCKED: cannot record Commit SHA" if sha.returncode else {"branch": record.branch, "sha": sha.stdout.strip(), "changed_files": staged_files}
         except (OSError, subprocess.SubprocessError) as exc: return f"TECHNICAL_BLOCKED: git commit operation failed: {exc}"

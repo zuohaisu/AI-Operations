@@ -1,9 +1,9 @@
 """Deterministic Prompt reuse and bounded Planner preparation for AIO-18.
 
 This module never starts Developer or QA.  Existing canonical task Prompts are
-copied byte-for-byte; Planner-generated Prompts are written to their canonical
-``tasks/`` files (where the Run step reads them) and mirrored into the owned Run
-artifact for provenance.
+copied byte-for-byte.  Planner-generated Prompts stay inside the owned
+preparation artifact so a Web Run never dirties the source checkout merely by
+preparing itself.
 
 Planner output receives one bounded repair attempt when it is structurally
 invalid.  The second request includes only the deterministic validation error;
@@ -107,6 +107,7 @@ class PromptResolver:
         ticket_spec: dict[str, Any],
         source_issue: dict[str, Any],
         planner: Callable[..., dict[str, str]] | None,
+        process_observer: Callable[[str, object], None] | None = None,
     ) -> dict[str, Any]:
         """Copy existing Prompts and prepare missing roles with bounded repair."""
         if self.has_active_run():
@@ -156,7 +157,11 @@ class PromptResolver:
                             "validation_error": last_validation_error,
                             "instruction": "Return a corrected complete JSON object for every requested role.",
                         }
-                    candidate = planner(context=attempt_context, missing_roles=tuple(missing))
+                    candidate = planner(
+                        context=attempt_context,
+                        missing_roles=tuple(missing),
+                        process_observer=process_observer,
+                    )
                     metadata["planner_attempts"] = attempt
                     self._write_json(artifact_dir / "prompt-metadata.json", metadata)
                     try:
@@ -182,15 +187,9 @@ class PromptResolver:
                     source = "existing_file"
                     canonical = str(existing[role].relative_to(self.repository))
                 else:
-                    # Persist the freshly generated Prompt to its canonical
-                    # tasks/ file so humans, git, and the Run step all read it
-                    # from one place, then mirror the exact bytes into the
-                    # owned Run artifact for provenance.
-                    paths[role].parent.mkdir(parents=True, exist_ok=True)
-                    paths[role].write_text(generated[role], encoding="utf-8")
-                    destination.write_bytes(paths[role].read_bytes())
+                    destination.write_text(generated[role], encoding="utf-8")
                     source = "planner_generated"
-                    canonical = str(paths[role].relative_to(self.repository))
+                    canonical = None
                 metadata["prompts"][role] = {
                     "source": source, "canonical_path": canonical,
                     "artifact_path": str(destination.relative_to(self.repository)),

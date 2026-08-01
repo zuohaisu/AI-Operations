@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from ticket_autopilot.connectors import plane
-from ticket_autopilot.web import LocalConfig, TicketBoard
+from ticket_autopilot.web import LocalConfig, TicketBoard, _bind_agent_inputs
 
 
 def raw(state_group: str = "started", *, sequence: int = 18, identifier: str = "AIO") -> dict:
@@ -86,6 +86,26 @@ def test_run_returns_owned_run_id_without_waiting_for_agent_work(tmp_path: Path)
     assert calls[0][3]["dev"]["source"] == "existing_file"
 
 
+def test_web_run_request_returns_observable_operation_before_preparation(tmp_path: Path):
+    service = board(tmp_path)
+
+    class HeldThread:
+        def __init__(self, *, target, args, **_kwargs):
+            self.target, self.args = target, args
+
+        def start(self):
+            return None
+
+    with mock.patch("ticket_autopilot.web.threading.Thread", HeldThread):
+        result = service.start_run("plane-item-18")
+
+    assert result["status"] == "PREPARING"
+    assert result["run_id"] is None
+    operation = service.operation(result["operation_id"])
+    assert operation["stage"] == "planner"
+    assert operation["process_output"][0]["message"].startswith("Run request accepted")
+
+
 def test_single_run_action_prepares_missing_prompts_before_agents(tmp_path: Path):
     planner_calls = []
     loop_calls = []
@@ -135,3 +155,22 @@ def test_invalid_v2_semantics_are_not_listed_or_sent_to_planner(tmp_path: Path):
     assert result["status"] == "BLOCKED_REQUIREMENTS"
     assert "impact closure" in result["reason"]
     service.planner.assert_not_called()
+
+
+def test_agent_runtime_contract_replaces_source_checkout_with_owned_worktree(tmp_path: Path):
+    source = tmp_path / "source"
+    worktree = tmp_path / "worktree"
+    spec = {
+        "repository": str(source),
+        "source_issue": {"description": f"Only edit {source}/docs/file.md"},
+    }
+    prompt = f"Developer must work in {source}."
+
+    bound_spec, bound_prompt = _bind_agent_inputs(
+        spec, prompt, repository=source, worktree=worktree,
+    )
+
+    assert bound_spec["repository"] == str(worktree.resolve())
+    assert str(source.resolve()) not in str(bound_spec)
+    assert str(source.resolve()) not in bound_prompt
+    assert str(worktree.resolve()) in bound_prompt

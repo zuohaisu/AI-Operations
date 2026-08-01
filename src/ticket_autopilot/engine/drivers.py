@@ -22,6 +22,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import urllib.request
 
 from .guardrails import (
@@ -256,11 +257,15 @@ def cli_call(agent: dict, inputs: dict, node: dict, engine_root: str,
     path_entries = current_path.split(os.pathsep) if current_path else []
     if interpreter_bin not in path_entries:
         cli_environment["PATH"] = os.pathsep.join([interpreter_bin, *path_entries])
-    proc = subprocess.run(
-        cmd, cwd=cwd, capture_output=True, text=True, timeout=600,
-        stdin=subprocess.DEVNULL,
-        env=cli_environment,
-    )
+    observer = agent.get("process_observer")
+    if observer is None:
+        proc = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True, timeout=600,
+            stdin=subprocess.DEVNULL,
+            env=cli_environment,
+        )
+    else:
+        proc = _streamed_cli_call(cmd, cwd=cwd, env=cli_environment, observer=observer)
     if proc.returncode != 0:
         # Some CLIs (notably qodercli) write account/model diagnostics to
         # stdout even when they exit non-zero.  Preserve whichever stream has
@@ -272,6 +277,55 @@ def cli_call(agent: dict, inputs: dict, node: dict, engine_root: str,
             f"cli driver ({cmd[0]}) exited {proc.returncode}: {diagnostic[:2000]}"
         )
     return _maybe_json(proc.stdout.strip(), agent)
+
+
+def _streamed_cli_call(cmd: list[str], *, cwd: str, env: dict[str, str], observer) -> subprocess.CompletedProcess[str]:
+    """Capture a CLI exactly as before while emitting each safe output line."""
+    process = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        stdin=subprocess.DEVNULL,
+        env=env,
+        bufsize=1,
+    )
+    _observe(observer, "process", f"started pid={process.pid} executable={os.path.basename(cmd[0])} cwd={cwd}")
+    chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
+
+    def drain(stream_name: str, pipe) -> None:
+        if pipe is None:
+            return
+        for line in iter(pipe.readline, ""):
+            chunks[stream_name].append(line)
+            _observe(observer, stream_name, line.rstrip("\n"))
+        pipe.close()
+
+    threads = [threading.Thread(target=drain, args=(name, pipe), daemon=True)
+               for name, pipe in (("stdout", process.stdout), ("stderr", process.stderr))]
+    for thread in threads:
+        thread.start()
+    try:
+        returncode = process.wait(timeout=600)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        returncode = process.wait()
+        _observe(observer, "process", "timed out after 600 seconds")
+        raise
+    finally:
+        for thread in threads:
+            thread.join(timeout=2)
+    _observe(observer, "process", f"exited code={returncode}")
+    return subprocess.CompletedProcess(cmd, returncode, "".join(chunks["stdout"]), "".join(chunks["stderr"]))
+
+
+def _observe(observer, stream: str, message: object) -> None:
+    try:
+        observer(stream, message)
+    except Exception:
+        # Observability must never change the delivery decision.
+        pass
 
 
 # ---------------------------------------------------------------------------

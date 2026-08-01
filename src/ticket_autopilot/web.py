@@ -17,6 +17,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,6 +28,7 @@ from urllib.parse import urlparse
 from ticket_autopilot.connectors import plane
 from ticket_autopilot.services.agent_catalog import AgentCatalog, CatalogError, PROFILE_KEYS, empty_profile, normalize_profile
 from ticket_autopilot.services.prompt_resolver import PromptPreparationError, PromptResolver
+from ticket_autopilot.services.process_output import ProcessOutputStore
 from ticket_autopilot.services.ticket_contract import preflight_plane_issue, readiness_errors
 from ticket_autopilot.services.run_events import redact
 from ticket_autopilot.services.run_manager import RunManager
@@ -57,6 +59,34 @@ class LocalServiceError(RuntimeError):
 
 def _copy_json(value: Any) -> Any:
     return json.loads(json.dumps(value))
+
+
+def _replace_repository_path(value: Any, source: str, worktree: str) -> Any:
+    """Replace source-checkout paths in every Agent-visible string."""
+    if isinstance(value, dict):
+        return {key: _replace_repository_path(item, source, worktree) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_replace_repository_path(item, source, worktree) for item in value]
+    if isinstance(value, str):
+        return value.replace(source, worktree)
+    return value
+
+
+def _bind_agent_inputs(
+    ticket_spec: dict[str, Any], prompt: str, *, repository: str | Path, worktree: str | Path,
+) -> tuple[dict[str, Any], str]:
+    """Return an Agent contract that names only the disposable Run worktree."""
+    source = str(Path(repository).resolve())
+    target = str(Path(worktree).resolve())
+    bound_spec = _replace_repository_path(_copy_json(ticket_spec), source, target)
+    bound_spec["repository"] = target
+    bound_prompt = prompt.replace(source, target)
+    boundary = (
+        "RUNTIME WORKTREE BOUNDARY: The only repository you may inspect or modify is "
+        f"{target}. Treat every relative path as relative to this directory. Do not access "
+        "any source checkout outside this worktree.\n\n"
+    )
+    return bound_spec, boundary + bound_prompt
 
 
 def _verification_commands(ticket_spec: dict[str, Any]) -> list[str]:
@@ -476,6 +506,9 @@ class TicketBoard:
         self.planner = planner
         self.web_loop_factory = web_loop_factory or self._default_web_loop
         self._web_loops: dict[str, WebAgentLoop] = {}
+        self.operations_root = self.repository / ".ticket-autopilot" / "operations"
+        self._operation_lock = threading.RLock()
+        self._operation_threads: dict[str, threading.Thread] = {}
 
     def list(self) -> dict[str, Any]:
         items = plane.list_work_items(**self._plane_options())
@@ -500,8 +533,12 @@ class TicketBoard:
             return {"status": "BLOCKED_REQUIREMENTS", "reason": str(exc), "developer_calls": 0, "qa_calls": 0}
         return {**prepared, "developer_calls": 0, "qa_calls": 0}
 
-    def run(self, issue_id: str) -> dict[str, Any]:
+    def run(
+        self, issue_id: str, *, process_observer: Callable[[str, object], None] | None = None,
+    ) -> dict[str, Any]:
         """Prepare missing Prompts, then start one Web Run from a single action."""
+        if process_observer is not None:
+            process_observer("process", "fetching and validating the Plane ticket")
         item = plane.fetch_issue(issue_id, **self._plane_options())
         detail = self._detail(item)
         if not detail["eligible"]:
@@ -513,11 +550,15 @@ class TicketBoard:
         try:
             developer_prompt = paths["dev"].read_text(encoding="utf-8")
             qa_prompt = paths["acceptance"].read_text(encoding="utf-8")
+            if process_observer is not None:
+                process_observer("process", "reusing existing Developer and QA prompt files")
         except OSError:
+            if process_observer is not None:
+                process_observer("process", "one or more prompts are missing; starting Planner")
             try:
                 prepared = resolver.prepare(
                     issue_key=item["identifier"], ticket_spec=detail["ticket_spec"],
-                    source_issue=item, planner=self.planner,
+                    source_issue=item, planner=self.planner, process_observer=process_observer,
                 )
             except PromptPreparationError as exc:
                 return {"status": "BLOCKED_REQUIREMENTS", "reason": str(exc), "run_id": None,
@@ -564,6 +605,99 @@ class TicketBoard:
             return {"status": "BLOCKED_REQUIREMENTS", "reason": str(exc), "run_id": None,
                     "developer_calls": 0, "qa_calls": 0}
 
+    def start_run(self, issue_id: str) -> dict[str, Any]:
+        """Return immediately with an observable operation while preparation runs."""
+        with self._operation_lock:
+            for state_path in self.operations_root.glob("*/state.json") if self.operations_root.is_dir() else ():
+                state = _read_json(state_path) or {}
+                if state.get("status") in {"PREPARING", "STARTING"}:
+                    return {
+                        "status": "BLOCKED",
+                        "reason": "another Run preparation is already active",
+                        "operation_id": state.get("operation_id"),
+                        "run_id": state.get("run_id"),
+                    }
+            operation_id = f"operation-{int(time.time() * 1_000_000)}-{secrets.token_hex(3)}"
+            artifact_dir = self.operations_root / operation_id
+            artifact_dir.mkdir(parents=True, exist_ok=False)
+            state = {
+                "schema_version": "1.0",
+                "operation_id": operation_id,
+                "issue_id": issue_id,
+                "status": "PREPARING",
+                "stage": "planner",
+                "run_id": None,
+                "reason": None,
+                "artifact_dir": str(artifact_dir),
+            }
+            atomic_json_write(artifact_dir / "state.json", state)
+            output = ProcessOutputStore(artifact_dir, known_secrets=(
+                self.settings.load(redacted=False)["plane"].get("api_key", ""),
+            ))
+            output.append(stage="planner", role="controller", stream="process",
+                          message="Run request accepted; preparing ticket and prompts")
+            thread = threading.Thread(
+                target=self._execute_operation,
+                args=(operation_id,),
+                daemon=True,
+                name=f"ticket-autopilot-{operation_id}",
+            )
+            self._operation_threads[operation_id] = thread
+            thread.start()
+        return {"status": "PREPARING", "operation_id": operation_id, "run_id": None}
+
+    def operation(self, operation_id: str) -> dict[str, Any]:
+        if not operation_id.startswith("operation-") or "/" in operation_id or ".." in operation_id:
+            raise ValueError("invalid operation id")
+        artifact_dir = self.operations_root / operation_id
+        state = _read_json(artifact_dir / "state.json")
+        if state is None:
+            raise ValueError("unknown operation")
+        secret_values = (self.settings.load(redacted=False)["plane"].get("api_key", ""),)
+        return {
+            **redact(state, secret_values),
+            "process_output": ProcessOutputStore(
+                artifact_dir, known_secrets=secret_values,
+            ).read(),
+        }
+
+    def _execute_operation(self, operation_id: str) -> None:
+        artifact_dir = self.operations_root / operation_id
+        state = _read_json(artifact_dir / "state.json") or {}
+        secret_values = (self.settings.load(redacted=False)["plane"].get("api_key", ""),)
+        output = ProcessOutputStore(artifact_dir, known_secrets=secret_values)
+        try:
+            result = self.run(
+                str(state["issue_id"]),
+                process_observer=output.observer(stage="planner", role="planner"),
+            )
+            run_id = result.get("run_id")
+            state.update({
+                "status": "RUNNING" if run_id else str(result.get("status") or "BLOCKED"),
+                "stage": "run" if run_id else "planner",
+                "run_id": run_id,
+                "reason": result.get("reason"),
+                "result": result,
+            })
+            if run_id:
+                run_record = RunManager(self.repository, known_secrets=secret_values).load_run(str(run_id))
+                run_output = ProcessOutputStore(run_record.artifact_dir, known_secrets=secret_values)
+                for entry in output.read():
+                    run_output.append(stage=entry.get("stage", "planner"), role=entry.get("role", "planner"),
+                                      stream=entry.get("stream", "process"), message=entry.get("message", ""),
+                                      round=int(entry.get("round") or 0))
+                run_output.append(stage="run", role="controller", stream="process",
+                                  message=f"created isolated Run {run_id}")
+            else:
+                output.append(stage="planner", role="controller", stream="process",
+                              message=f"preparation stopped: {state['status']} {state.get('reason') or ''}")
+        except Exception as exc:
+            state.update({"status": "HARD_BREAK", "stage": "planner", "run_id": None,
+                          "reason": str(exc) or type(exc).__name__})
+            output.append(stage="planner", role="controller", stream="stderr", message=state["reason"])
+        finally:
+            atomic_json_write(artifact_dir / "state.json", state)
+
     def _default_web_loop(self, *, settings: LocalConfig, repository: Path) -> WebAgentLoop:
         """Build the one product adapter; individual external calls remain isolated."""
         import uuid
@@ -598,15 +732,22 @@ class TicketBoard:
             policy = GuardrailPolicy(allowed_roots=[run["worktree"]], read_only=False,
                                      tool_whitelist=list(DEVELOPER_TOOL_WHITELIST))
             run_context = RunExecutionContext(run_id=run["run_id"], worktree=run["worktree"], branch=run["branch"])
-            inputs = {key: kwargs[key] for key in ("ticket_spec", "findings")}
+            bound_spec, bound_prompt = _bind_agent_inputs(
+                kwargs["ticket_spec"], kwargs["prompt"], repository=repository, worktree=run["worktree"],
+            )
+            inputs = {"ticket_spec": bound_spec, "findings": kwargs["findings"]}
+            process_observer = ProcessOutputStore(
+                run["artifact_dir"], known_secrets=secret_values,
+            ).observer(stage="development", role="developer", round=int(kwargs.get("qa_attempt") or 0))
 
             def call(session: dict[str, Any] | None) -> Any:
                 agent = catalog.build_agent(
                     developer_profile, role="developer", cwd=run["worktree"],
                     allowed_roots=[run["worktree"]],
-                    system=kwargs["prompt"] + "\nDo not run git commit.",
+                    system=bound_prompt + "\nDo not run git commit.",
                     session=session,
                 )
+                agent = {**agent, "process_observer": process_observer}
                 return drivers.cli_call(agent, inputs, {"agent": "developer"}, str(repository),
                                         policy=policy, run_context=run_context)
 
@@ -655,12 +796,23 @@ class TicketBoard:
             spec = json.loads((Path(run.artifact_dir) / "ticket-spec.json").read_text(encoding="utf-8"))
             commands = _verification_commands(spec)
             verification_environment = _verification_environment(repository)
+            output = ProcessOutputStore(run.artifact_dir, known_secrets=secret_values)
             checks = []
             for command in commands:
+                output.append(stage="verification", role="controller", stream="process",
+                              message=f"started command={command}", round=qa_attempt)
                 proc = subprocess.run(["/bin/sh", "-c", command], cwd=run.worktree, capture_output=True,
                                       text=True, stdin=subprocess.DEVNULL, timeout=60, check=False,
                                       env=verification_environment)
                 checks.append({"command": command, "exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr})
+                if proc.stdout:
+                    output.append(stage="verification", role="controller", stream="stdout",
+                                  message=proc.stdout, round=qa_attempt)
+                if proc.stderr:
+                    output.append(stage="verification", role="controller", stream="stderr",
+                                  message=proc.stderr, round=qa_attempt)
+                output.append(stage="verification", role="controller", stream="process",
+                              message=f"exited code={proc.returncode} command={command}", round=qa_attempt)
             diff_proc = subprocess.run(["git", "diff", "--no-ext-diff", run.base_sha], cwd=run.worktree,
                                        capture_output=True, text=True, check=False)
             files_proc = subprocess.run(["git", "diff", "--name-only", run.base_sha], cwd=run.worktree,
@@ -685,10 +837,16 @@ class TicketBoard:
 
         def independent_qa(**kwargs: Any) -> Any:
             run = kwargs["run"]
+            bound_spec, bound_prompt = _bind_agent_inputs(
+                kwargs["ticket_spec"], kwargs["prompt"], repository=repository, worktree=run["worktree"],
+            )
             agent = catalog.build_agent(
                 qa_profile, role="qa", cwd=run["worktree"], allowed_roots=[run["worktree"]],
                 system=qa.QA_SYSTEM_PROMPT, expect="json", session={"mode": "ephemeral"},
             )
+            agent = {**agent, "process_observer": ProcessOutputStore(
+                run["artifact_dir"], known_secrets=secret_values,
+            ).observer(stage="qa", role="qa", round=kwargs["qa_attempt"])}
             entry = SessionLedger(run["artifact_dir"]).record("qa", {
                 "role": "qa", "provider": qa_profile["provider"], "model": qa_profile.get("model", ""),
                 "sandbox": run["worktree"], "permission_mode": "read-only",
@@ -696,10 +854,10 @@ class TicketBoard:
             })
             session_event(run, stage="qa", role="qa", status="ACTIVE",
                           event_type="agent_session_started", details=entry, round=kwargs["qa_attempt"])
-            return qa.run_qa(agent=agent, engine_root=str(repository), ticket_spec=kwargs["ticket_spec"],
+            return qa.run_qa(agent=agent, engine_root=str(repository), ticket_spec=bound_spec,
                              diff=kwargs["diff"], test_evidence={"checks": kwargs["check_evidence"]},
                              run_id=run["run_id"], qa_attempt=kwargs["qa_attempt"],
-                             ticket_context=kwargs["prompt"])
+                             ticket_context=bound_prompt)
 
         return WebAgentLoop(
             run_manager, developer=developer, checker=checker,
@@ -708,6 +866,14 @@ class TicketBoard:
 
     def timeline(self, run_id: str) -> dict[str, Any]:
         return self._loop_for(run_id).timeline(run_id)
+
+    def latest_timeline(self) -> dict[str, Any]:
+        run_root = self.repository / ".ticket-autopilot" / "runs"
+        candidates = list(run_root.glob("*/state.json")) if run_root.is_dir() else []
+        if not candidates:
+            return {"run_id": None, "snapshot": None, "events": [], "process_output": []}
+        latest = max(candidates, key=lambda path: path.stat().st_mtime)
+        return self.timeline(latest.parent.name)
 
     def retry(self, run_id: str) -> dict[str, Any]:
         return self._loop_for(run_id).retry_current_stage(run_id)
@@ -824,6 +990,11 @@ class SettingsHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, self.catalog.snapshot(refresh=refresh))
             elif path == "/api/tickets":
                 self._json(HTTPStatus.OK, self.tickets.list())
+            elif path == "/api/runs/latest":
+                self._json(HTTPStatus.OK, self.tickets.latest_timeline())
+            elif path.startswith("/api/operations/"):
+                operation_id = path.removeprefix("/api/operations/").rstrip("/")
+                self._json(HTTPStatus.OK, self.tickets.operation(operation_id))
             elif path.startswith("/api/runs/"):
                 run_id = path.removeprefix("/api/runs/").rstrip("/")
                 self._json(HTTPStatus.OK, self.tickets.timeline(run_id))
@@ -861,7 +1032,7 @@ class SettingsHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/tickets/") and path.endswith("/run"):
             issue_id = path.removeprefix("/api/tickets/").removesuffix("/run").rstrip("/")
             try:
-                self._json(HTTPStatus.OK, self.tickets.run(issue_id))
+                self._json(HTTPStatus.OK, self.tickets.start_run(issue_id))
             except (plane.PlaneAPIError, ValueError) as exc:
                 self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc), "developer_calls": 0, "qa_calls": 0})
             return

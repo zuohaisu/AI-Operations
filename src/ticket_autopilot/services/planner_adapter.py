@@ -81,7 +81,12 @@ def build_planner(
     """Build the PromptResolver-compatible Planner callable."""
     repository = Path(repository).resolve()
 
-    def planner(*, context: dict[str, Any], missing_roles: tuple[str, ...]) -> dict[str, str]:
+    def planner(
+        *,
+        context: dict[str, Any],
+        missing_roles: tuple[str, ...],
+        process_observer: Callable[[str, object], None] | None = None,
+    ) -> dict[str, str]:
         profile = settings.load(redacted=False)["agents"].get("planner")
         summary = _profile_summary(profile)
         if not summary["provider"]:
@@ -108,6 +113,8 @@ def build_planner(
             os.close(descriptor)
             argv = agent["argv"]
             agent = {**agent, "argv": [*argv[:-1], "-o", output_path, argv[-1]]}
+        if process_observer is not None:
+            agent = {**agent, "process_observer": process_observer}
         inputs = {
             "requested_roles": ", ".join(missing_roles),
             "context": json.dumps(context, ensure_ascii=False, sort_keys=True),

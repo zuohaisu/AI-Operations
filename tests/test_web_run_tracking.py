@@ -70,6 +70,8 @@ def test_timeline_uses_append_only_artifact_for_roles_rounds_prompts_findings_an
         commit = next(event for event in events if event["event_type"] == "commit_recorded")
         assert commit["details"]["sha"] == timeline["snapshot"]["commit"]["sha"]
         assert timeline["snapshot"]["status"] == "PASS"
+        assert timeline["process_output"]
+        assert any(entry["stage"] == "commit" for entry in timeline["process_output"])
     finally:
         fixture.close()
 
