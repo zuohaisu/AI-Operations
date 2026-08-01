@@ -15,7 +15,15 @@ from urllib.request import Request, urlopen
 import pytest
 
 from ticket_autopilot.services.agent_catalog import AgentCatalog
-from ticket_autopilot.web import HOST, LocalConfig, ServiceManager, SettingsHandler, atomic_json_write
+from ticket_autopilot.web import (
+    HOST,
+    LocalConfig,
+    ServiceManager,
+    SettingsHandler,
+    _verification_commands,
+    _verification_environment,
+    atomic_json_write,
+)
 
 
 def _free_port() -> int:
@@ -164,3 +172,30 @@ def test_static_settings_ui_exposes_three_agent_dropdown_groups() -> None:
     assert "/api/agent-catalog" in app
     assert "refresh=1" in app
     assert "not in the probed catalog" in app
+
+
+def test_verification_commands_deduplicate_ac_and_required_checks() -> None:
+    ticket_spec = {
+        "verification": [
+            {"type": "automated", "command": "python3 -m pytest -q"},
+            {"type": "automated", "command": "python3 -m pytest -q"},
+            {"type": "inspection", "command": "do not execute"},
+        ],
+        "required_checks": ["python3 -m pytest -q", "git diff --check"],
+    }
+
+    assert _verification_commands(ticket_spec) == [
+        "python3 -m pytest -q",
+        "git diff --check",
+    ]
+
+
+def test_verification_environment_prefers_project_venv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    environment = _verification_environment(tmp_path)
+
+    assert environment["PATH"].split(":")[0] == str(venv_bin)
+    assert environment["PATH"].endswith("/usr/bin")

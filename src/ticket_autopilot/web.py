@@ -59,6 +59,30 @@ def _copy_json(value: Any) -> Any:
     return json.loads(json.dumps(value))
 
 
+def _verification_commands(ticket_spec: dict[str, Any]) -> list[str]:
+    """Return each executable ticket check once, preserving contract order."""
+    commands = [
+        item["command"]
+        for item in ticket_spec.get("verification", [])
+        if item.get("type") in {"automated", "query"} and item.get("command")
+    ]
+    commands.extend(ticket_spec.get("required_checks", []))
+    return list(dict.fromkeys(commands))
+
+
+def _verification_environment(repository: Path) -> dict[str, str]:
+    """Make the service/project Python environment available to ticket checks."""
+    environment = os.environ.copy()
+    path_entries: list[str] = []
+    for candidate in (repository / ".venv" / "bin", Path(sys.executable).parent):
+        candidate_text = str(candidate)
+        if candidate.is_dir() and candidate_text not in path_entries:
+            path_entries.append(candidate_text)
+    current_path = environment.get("PATH", "")
+    environment["PATH"] = os.pathsep.join([*path_entries, current_path])
+    return environment
+
+
 def app_home(home: str | Path | None = None) -> Path:
     """Return the private per-user state directory (overridable for tests)."""
     return Path(home) if home is not None else Path.home() / APP_DIRECTORY
@@ -629,12 +653,13 @@ class TicketBoard:
 
         def checker(run, *, qa_attempt: int) -> dict[str, Any]:
             spec = json.loads((Path(run.artifact_dir) / "ticket-spec.json").read_text(encoding="utf-8"))
-            commands = [item["command"] for item in spec["verification"] if item["type"] in {"automated", "query"}]
-            commands.extend(spec["required_checks"])
+            commands = _verification_commands(spec)
+            verification_environment = _verification_environment(repository)
             checks = []
             for command in commands:
                 proc = subprocess.run(["/bin/sh", "-c", command], cwd=run.worktree, capture_output=True,
-                                      text=True, stdin=subprocess.DEVNULL, timeout=60, check=False)
+                                      text=True, stdin=subprocess.DEVNULL, timeout=60, check=False,
+                                      env=verification_environment)
                 checks.append({"command": command, "exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr})
             diff_proc = subprocess.run(["git", "diff", "--no-ext-diff", run.base_sha], cwd=run.worktree,
                                        capture_output=True, text=True, check=False)
