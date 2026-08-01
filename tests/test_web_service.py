@@ -8,13 +8,22 @@ import socket
 import subprocess
 import threading
 from http.server import ThreadingHTTPServer
+from unittest import mock
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
 
 from ticket_autopilot.services.agent_catalog import AgentCatalog
-from ticket_autopilot.web import HOST, LocalConfig, ServiceManager, SettingsHandler, atomic_json_write
+from ticket_autopilot.web import (
+    HOST,
+    LocalConfig,
+    ServiceManager,
+    SettingsHandler,
+    _verification_commands,
+    _verification_environment,
+    atomic_json_write,
+)
 
 
 def _free_port() -> int:
@@ -56,6 +65,22 @@ def test_start_is_detached_healthy_and_single_instance(service: tuple[ServiceMan
     assert manager.stop() == 0
     assert manager.status() == 1
     assert manager.log_path.exists()
+
+
+def test_service_id_beginning_with_dash_is_passed_as_one_option_value(tmp_path: Path) -> None:
+    manager = ServiceManager(
+        home=tmp_path / ".ticket-autopilot", port=_free_port(), project_root=Path.cwd(),
+        browser_opener=lambda _url: None,
+    )
+    try:
+        with mock.patch("ticket_autopilot.web.secrets.token_urlsafe", return_value="-leading-dash-service-id-value"):
+            assert manager.start(open_browser=False) == 0
+        record = json.loads(manager.service_path.read_text())
+        assert record["service_id"].startswith("-")
+        with urlopen(f"http://{HOST}:{manager.port}/api/health", timeout=1) as response:
+            assert json.loads(response.read())["service_id"] == record["service_id"]
+    finally:
+        manager.stop()
 
 
 def test_stale_record_recovers_but_foreign_listener_is_never_stopped(tmp_path: Path) -> None:
@@ -147,3 +172,30 @@ def test_static_settings_ui_exposes_three_agent_dropdown_groups() -> None:
     assert "/api/agent-catalog" in app
     assert "refresh=1" in app
     assert "not in the probed catalog" in app
+
+
+def test_verification_commands_deduplicate_ac_and_required_checks() -> None:
+    ticket_spec = {
+        "verification": [
+            {"type": "automated", "command": "python3 -m pytest -q"},
+            {"type": "automated", "command": "python3 -m pytest -q"},
+            {"type": "inspection", "command": "do not execute"},
+        ],
+        "required_checks": ["python3 -m pytest -q", "git diff --check"],
+    }
+
+    assert _verification_commands(ticket_spec) == [
+        "python3 -m pytest -q",
+        "git diff --check",
+    ]
+
+
+def test_verification_environment_prefers_project_venv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    environment = _verification_environment(tmp_path)
+
+    assert environment["PATH"].split(":")[0] == str(venv_bin)
+    assert environment["PATH"].endswith("/usr/bin")

@@ -59,6 +59,30 @@ def _copy_json(value: Any) -> Any:
     return json.loads(json.dumps(value))
 
 
+def _verification_commands(ticket_spec: dict[str, Any]) -> list[str]:
+    """Return each executable ticket check once, preserving contract order."""
+    commands = [
+        item["command"]
+        for item in ticket_spec.get("verification", [])
+        if item.get("type") in {"automated", "query"} and item.get("command")
+    ]
+    commands.extend(ticket_spec.get("required_checks", []))
+    return list(dict.fromkeys(commands))
+
+
+def _verification_environment(repository: Path) -> dict[str, str]:
+    """Make the service/project Python environment available to ticket checks."""
+    environment = os.environ.copy()
+    path_entries: list[str] = []
+    for candidate in (repository / ".venv" / "bin", Path(sys.executable).parent):
+        candidate_text = str(candidate)
+        if candidate.is_dir() and candidate_text not in path_entries:
+            path_entries.append(candidate_text)
+    current_path = environment.get("PATH", "")
+    environment["PATH"] = os.pathsep.join([*path_entries, current_path])
+    return environment
+
+
 def app_home(home: str | Path | None = None) -> Path:
     """Return the private per-user state directory (overridable for tests)."""
     return Path(home) if home is not None else Path.home() / APP_DIRECTORY
@@ -248,7 +272,7 @@ class ServiceManager:
         self._prepare_log()
         command = [
             sys.executable, "-m", "ticket_autopilot.web", "server",
-            "--port", str(self.port), "--service-id", service_id,
+            "--port", str(self.port), f"--service-id={service_id}",
             "--home", str(self.home),
         ]
         try:
@@ -477,24 +501,64 @@ class TicketBoard:
         return {**prepared, "developer_calls": 0, "qa_calls": 0}
 
     def run(self, issue_id: str) -> dict[str, Any]:
-        """Start a prepared Web Run and return its id before Agent work begins."""
+        """Prepare missing Prompts, then start one Web Run from a single action."""
         item = plane.fetch_issue(issue_id, **self._plane_options())
         detail = self._detail(item)
         if not detail["eligible"]:
             return {"status": "BLOCKED_REQUIREMENTS", "reason": detail["reason"], "run_id": None,
                     "developer_calls": 0, "qa_calls": 0}
-        paths = PromptResolver(self.repository).canonical_paths(detail["identifier"])
+        resolver = PromptResolver(self.repository)
+        paths = resolver.canonical_paths(detail["identifier"])
+        prepared: dict[str, Any] | None = None
         try:
             developer_prompt = paths["dev"].read_text(encoding="utf-8")
             qa_prompt = paths["acceptance"].read_text(encoding="utf-8")
         except OSError:
-            return {"status": "BLOCKED_REQUIREMENTS", "reason": "Run requires prepared Developer and QA Prompts",
-                    "run_id": None, "developer_calls": 0, "qa_calls": 0}
+            try:
+                prepared = resolver.prepare(
+                    issue_key=item["identifier"], ticket_spec=detail["ticket_spec"],
+                    source_issue=item, planner=self.planner,
+                )
+            except PromptPreparationError as exc:
+                return {"status": "BLOCKED_REQUIREMENTS", "reason": str(exc), "run_id": None,
+                        "developer_calls": 0, "qa_calls": 0}
+            if prepared.get("status") != "READY":
+                return {
+                    "status": str(prepared.get("status") or "HARD_BREAK_PLANNER"),
+                    "reason": str(prepared.get("hard_break_reason") or "Planner did not prepare runnable Prompts"),
+                    "artifact_dir": prepared.get("artifact_dir"), "run_id": None,
+                    "developer_calls": 0, "qa_calls": 0,
+                }
+            artifact_dir = self.repository / str(prepared["artifact_dir"])
+            try:
+                developer_prompt = (artifact_dir / "dev-prompt.md").read_text(encoding="utf-8")
+                qa_prompt = (artifact_dir / "acceptance-prompt.md").read_text(encoding="utf-8")
+            except OSError as exc:
+                return {"status": "HARD_BREAK_PLANNER", "reason": f"prepared Prompt artifact is unavailable: {exc}",
+                        "artifact_dir": prepared.get("artifact_dir"), "run_id": None,
+                        "developer_calls": 0, "qa_calls": 0}
+
+        if prepared is None:
+            prompt_sources = {
+                role: {"source": "existing_file", "canonical_path": str(path.relative_to(self.repository))}
+                for role, path in paths.items()
+            }
+        else:
+            prompt_sources = prepared["prompts"]
         try:
             loop = self.web_loop_factory(settings=self.settings, repository=self.repository)
-            result = loop.start(detail["ticket_spec"], developer_prompt=developer_prompt, qa_prompt=qa_prompt)
+            result = loop.start(
+                detail["ticket_spec"], developer_prompt=developer_prompt, qa_prompt=qa_prompt,
+                prompt_sources=prompt_sources,
+            )
             if result.get("run_id"):
                 self._web_loops[str(result["run_id"])] = loop
+            if prepared is not None:
+                result["preparation"] = {
+                    "status": prepared["status"], "artifact_dir": prepared["artifact_dir"],
+                    "planner_outcome": prepared["planner_outcome"],
+                    "planner_attempts": prepared.get("planner_attempts", 0),
+                }
             return result
         except WebAgentLoopError as exc:
             return {"status": "BLOCKED_REQUIREMENTS", "reason": str(exc), "run_id": None,
@@ -589,12 +653,13 @@ class TicketBoard:
 
         def checker(run, *, qa_attempt: int) -> dict[str, Any]:
             spec = json.loads((Path(run.artifact_dir) / "ticket-spec.json").read_text(encoding="utf-8"))
-            commands = [item["command"] for item in spec["verification"] if item["type"] in {"automated", "query"}]
-            commands.extend(spec["required_checks"])
+            commands = _verification_commands(spec)
+            verification_environment = _verification_environment(repository)
             checks = []
             for command in commands:
                 proc = subprocess.run(["/bin/sh", "-c", command], cwd=run.worktree, capture_output=True,
-                                      text=True, stdin=subprocess.DEVNULL, timeout=60, check=False)
+                                      text=True, stdin=subprocess.DEVNULL, timeout=60, check=False,
+                                      env=verification_environment)
                 checks.append({"command": command, "exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr})
             diff_proc = subprocess.run(["git", "diff", "--no-ext-diff", run.base_sha], cwd=run.worktree,
                                        capture_output=True, text=True, check=False)

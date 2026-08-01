@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import unittest
 from unittest import mock
@@ -100,6 +101,11 @@ class TestCliDriver(unittest.TestCase):
         self.assertEqual(command[command.index("--allowedTools") + 1], "Read,Glob")
         self.assertIn("--append-system-prompt", command)
         self.assertEqual(run.call_args.kwargs["cwd"], os.path.join(PKG_ROOT, "sandbox"))
+        self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(
+            run.call_args.kwargs["env"]["PATH"].split(os.pathsep)[0],
+            os.path.dirname(sys.executable),
+        )
 
     @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
     def test_translates_write_mode_to_each_clis_real_flag_value(self, run):
@@ -164,6 +170,44 @@ class TestCliDriver(unittest.TestCase):
         self.assertNotIn("--allowedTools", command)
         self.assertIn("--no-session-persistence", command)
         self.assertEqual(run.call_args.kwargs["cwd"], os.path.join(PKG_ROOT, "sandbox"))
+
+    @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
+    def test_cli_failure_uses_stdout_when_stderr_is_empty(self, run):
+        run.return_value = mock.Mock(
+            returncode=1,
+            stdout="Warning: no models available for your account.\n",
+            stderr="",
+        )
+        agent = {
+            "driver": "cli",
+            "command": "qodercli",
+            "cwd": "sandbox",
+            "permission_mode": "read-only",
+            "tools": ["Read"],
+            "tools_flag": "--tools",
+            "tools_as_args": True,
+        }
+
+        with self.assertRaisesRegex(
+            RuntimeError, "no models available for your account"
+        ):
+            drivers.cli_call(agent, {}, {"agent": "verifier"}, PKG_ROOT)
+
+    @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
+    def test_cli_failure_without_output_has_explicit_diagnostic(self, run):
+        run.return_value = mock.Mock(returncode=1, stdout="", stderr="")
+        agent = {
+            "driver": "cli",
+            "command": "qodercli",
+            "cwd": "sandbox",
+            "permission_mode": "read-only",
+            "tools": ["Read"],
+            "tools_flag": "--tools",
+            "tools_as_args": True,
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "no diagnostic output"):
+            drivers.cli_call(agent, {}, {"agent": "verifier"}, PKG_ROOT)
 
     @mock.patch("ticket_autopilot.engine.drivers.subprocess.run")
     def test_argv_template_substitutes_placeholders_codex_style(self, run):

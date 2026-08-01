@@ -68,8 +68,8 @@ def test_run_returns_owned_run_id_without_waiting_for_agent_work(tmp_path: Path)
     calls = []
 
     class FakeLoop:
-        def start(self, ticket_spec, *, developer_prompt, qa_prompt):
-            calls.append((ticket_spec, developer_prompt, qa_prompt))
+        def start(self, ticket_spec, *, developer_prompt, qa_prompt, prompt_sources):
+            calls.append((ticket_spec, developer_prompt, qa_prompt, prompt_sources))
             return {"status": "ACTIVE", "run_id": "aio-19-fake"}
 
     service = board(tmp_path)
@@ -81,7 +81,41 @@ def test_run_returns_owned_run_id_without_waiting_for_agent_work(tmp_path: Path)
         result = service.run(started["id"])
 
     assert result == {"status": "ACTIVE", "run_id": "aio-19-fake"}
-    assert calls and calls[0][0]["issue_key"] == "AIO-18" and calls[0][1:] == ("dev", "qa")
+    assert calls and calls[0][0]["issue_key"] == "AIO-18"
+    assert calls[0][1:3] == ("dev", "qa")
+    assert calls[0][3]["dev"]["source"] == "existing_file"
+
+
+def test_single_run_action_prepares_missing_prompts_before_agents(tmp_path: Path):
+    planner_calls = []
+    loop_calls = []
+
+    def planner(**kwargs):
+        planner_calls.append(kwargs)
+        return {
+            "dev": "立即执行: Developer handles AIO-18 in zuohaisu/AI-Operations with Diff attribution, dirty-tree discipline, and a visual gate.",
+            "acceptance": "立即执行: independent QA handles AIO-18 in zuohaisu/AI-Operations with Diff attribution, dirty-tree discipline, and a visual gate.",
+        }
+
+    class FakeLoop:
+        def start(self, ticket_spec, *, developer_prompt, qa_prompt, prompt_sources):
+            loop_calls.append((ticket_spec, developer_prompt, qa_prompt, prompt_sources))
+            return {"status": "ACTIVE", "run_id": "aio-18-one-click"}
+
+    service = board(tmp_path, planner=planner)
+    service.web_loop_factory = lambda **_kwargs: FakeLoop()
+    started = plane.normalize_work_item(raw())
+    with mock.patch("ticket_autopilot.web.plane.fetch_issue", return_value=started):
+        result = service.run(started["id"])
+
+    assert result["run_id"] == "aio-18-one-click"
+    assert result["preparation"]["planner_outcome"] == "generated"
+    assert result["preparation"]["planner_attempts"] == 1
+    assert len(planner_calls) == 1
+    assert len(loop_calls) == 1
+    assert loop_calls[0][1].startswith("立即执行")
+    assert loop_calls[0][2].startswith("立即执行")
+    assert loop_calls[0][3]["dev"]["source"] == "planner_generated"
 
 
 def test_invalid_v2_semantics_are_not_listed_or_sent_to_planner(tmp_path: Path):

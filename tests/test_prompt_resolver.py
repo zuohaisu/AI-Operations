@@ -128,8 +128,28 @@ def test_planner_failure_or_missing_role_is_hard_break(tmp_path: Path):
     result = service.prepare(issue_key="AIO-18", ticket_spec=SPEC, source_issue=ISSUE,
                              planner=lambda **_kwargs: {"dev": generated("dev")})
     assert result["status"] == "HARD_BREAK_PLANNER"
+    assert result["planner_attempts"] == 2
     assert "acceptance" in result["hard_break_reason"]
     assert result["prompts"] == {}
+
+
+def test_invalid_planner_output_gets_one_feedback_repair_attempt(tmp_path: Path):
+    service = resolver(tmp_path)
+    calls = []
+
+    def planner(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return {"dev": "too short", "acceptance": "too short"}
+        return {"dev": generated("dev"), "acceptance": generated("acceptance")}
+
+    result = service.prepare(issue_key="AIO-18", ticket_spec=SPEC, source_issue=ISSUE, planner=planner)
+
+    assert result["status"] == "READY"
+    assert result["planner_attempts"] == 2
+    assert len(calls) == 2
+    assert calls[1]["context"]["repair"]["attempt"] == 2
+    assert "immediate action envelope" in calls[1]["context"]["repair"]["validation_error"]
 
 
 def test_exact_three_digit_task_mapping(tmp_path: Path):
