@@ -7,9 +7,9 @@ VENV="$ROOT_DIR/.venv"
 COMMAND=${1:-start}
 
 case "$COMMAND" in
-  start|status|stop|restart) ;;
+  start|status|stop|restart|foreground) ;;
   *)
-    echo "Usage: ./start-ticket-autopilot [start|status|stop|restart]" >&2
+    echo "Usage: ./start-ticket-autopilot [start|status|stop|restart|foreground]" >&2
     exit 2
     ;;
 esac

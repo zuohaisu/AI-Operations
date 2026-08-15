@@ -23,15 +23,18 @@ Ticket Autopilot 是一个供单人本机使用的 **Plane-first Web 控制器**
 python3.11 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e '.[dev]'
-python -m ticket_autopilot.web start
 ```
 
-服务仅监听 `http://127.0.0.1:8765/`，启动后会打开浏览器。停止或查看状态：
+服务仅监听 `http://127.0.0.1:8765/`，启动后会打开浏览器。两种运行模式：
 
-```bash
-python -m ticket_autopilot.web status
-python -m ticket_autopilot.web stop
-```
+- **后台模式（默认）**：`./start-ticket-autopilot`（或 `python -m ticket_autopilot.web start`）。服务在独立进程组中运行，命令立即返回；用 `status` / `stop` 管理：
+
+  ```bash
+  ./start-ticket-autopilot status
+  ./start-ticket-autopilot stop
+  ```
+
+- **前台模式**：`./start-ticket-autopilot foreground`。服务在当前终端会话中前台运行，随时按 **Ctrl+C** 关闭；该实例不写入托管 ledger，`status` / `stop` 不管理它，Ctrl+C 是其关闭方式。
 
 首次打开页面时填写：Plane workspace、project ID、API key、目标 Git repository 的绝对路径，以及 Planner / Developer / QA CLI 命令。配置保存在本机 `~/.ticket-autopilot/config.json`，目录权限为 owner-only；页面和日志会掩码 Secret。它是单人本机 Phase 1 设计，不提供 Keychain、多用户或远程访问。
 
@@ -58,7 +61,7 @@ Run artifacts 和 disposable Worktree 均位于被开发仓库的 `.ticket-autop
 
 ## 当前已知可靠性问题
 
-服务启动的 `service_id` 可能以 `-` 开头，偶发被命令行误解析，导致本机健康检查超时。该问题已有失败测试覆盖，尚未修复；在它修复前，不能把“单命令稳定启动”视为完成。
+服务启动的 `service_id` 以 `--service-id=<值>` 等号形式作为单个选项值传递，argparse 不会把以 `-` 开头的值误当作选项；进程归属匹配使用 `ps -ww` 消除命令行宽度截断风险。以 `-` 开头的 service_id 全链路（start → health → status → stop）由 `tests/test_web_service.py` 专项测试覆盖。`start-ticket-autopilot` 的“单命令稳定启动”仍以该测试集全绿为验收标准。
 
 ## 文档定位
 

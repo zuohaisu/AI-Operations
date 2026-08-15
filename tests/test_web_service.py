@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import threading
+import time
 from http.server import ThreadingHTTPServer
 from unittest import mock
 from urllib.error import HTTPError
@@ -22,7 +26,9 @@ from ticket_autopilot.web import (
     SettingsHandler,
     _verification_commands,
     _verification_environment,
+    _parser,
     atomic_json_write,
+    main,
 )
 
 
@@ -79,6 +85,11 @@ def test_service_id_beginning_with_dash_is_passed_as_one_option_value(tmp_path: 
         assert record["service_id"].startswith("-")
         with urlopen(f"http://{HOST}:{manager.port}/api/health", timeout=1) as response:
             assert json.loads(response.read())["service_id"] == record["service_id"]
+        # Ownership matching must not treat the dash as an option: the full
+        # start -> status -> stop lifecycle works for a dash-leading id.
+        assert manager.status() == 0
+        assert manager.stop() == 0
+        assert manager.status() == 1
     finally:
         manager.stop()
 
@@ -99,6 +110,81 @@ def test_stale_record_recovers_but_foreign_listener_is_never_stopped(tmp_path: P
         foreign.listen()
         assert manager.start(open_browser=False) == 1
         assert foreign.fileno() != -1
+
+
+def test_foreground_serves_until_sigint_like_a_terminal_session(tmp_path: Path) -> None:
+    port = _free_port()
+    home = tmp_path / ".ticket-autopilot"
+    process = subprocess.Popen(
+        [sys.executable, "-m", "ticket_autopilot.web", "foreground",
+         "--port", str(port), "--home", str(home)],
+        cwd=Path.cwd(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 10.0
+        healthy = False
+        while time.monotonic() < deadline and process.poll() is None:
+            try:
+                with urlopen(f"http://{HOST}:{port}/api/health", timeout=0.3) as response:
+                    if response.status == 200:
+                        healthy = True
+                        break
+            except (OSError, TimeoutError):
+                time.sleep(0.1)
+        if not healthy:
+            if process.poll() is None:
+                process.kill()
+            output = process.stdout.read() if process.stdout else ""
+            raise AssertionError(f"foreground service did not become healthy: {output!r}")
+        os.killpg(process.pid, signal.SIGINT)  # Ctrl+C semantics for the owned group
+        assert process.wait(timeout=5) == 0, "SIGINT must shut the foreground service down cleanly"
+        output = process.stdout.read() if process.stdout else ""
+        assert "press Ctrl+C to stop" in output
+        assert "Ticket Autopilot stopped" in output
+    finally:
+        if process.poll() is None:
+            process.kill()
+
+
+def test_foreground_keyboard_interrupt_returns_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    manager = ServiceManager(home=tmp_path / ".ticket-autopilot", port=_free_port(), project_root=Path.cwd(),
+                             browser_opener=lambda _url: None)
+    received: dict = {}
+
+    def fake_serve(**kwargs: object) -> None:
+        received.update(kwargs)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("ticket_autopilot.web.serve", fake_serve)
+    assert manager.serve_foreground(open_browser=False) == 0
+    assert received["port"] == manager.port
+    assert received["home"] == tmp_path / ".ticket-autopilot"
+    assert received["project_root"] == Path.cwd()
+    output = capsys.readouterr().out
+    assert "press Ctrl+C to stop" in output
+    assert "Ticket Autopilot stopped" in output
+
+
+def test_foreground_refuses_while_detached_service_runs(service: tuple[ServiceManager, list[str]]) -> None:
+    manager, opened = service
+    assert manager.start() == 0
+    assert opened == [manager.url]
+    assert manager.serve_foreground(open_browser=False) == 0
+    assert opened == [manager.url]  # foreground must not open the browser again
+
+
+def test_web_cli_foreground_dispatches_to_serve_foreground(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeManager:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+        def serve_foreground(self) -> int:
+            return 0
+
+    monkeypatch.setattr("ticket_autopilot.web.ServiceManager", FakeManager)
+    assert main(["foreground"]) == 0
+    assert _parser().parse_args(["foreground"]).command == "foreground"
 
 
 @pytest.fixture

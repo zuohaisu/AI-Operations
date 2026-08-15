@@ -371,6 +371,37 @@ class ServiceManager:
             return 1
         return self.start(open_browser=open_browser)
 
+    def serve_foreground(self, *, open_browser: bool = True) -> int:
+        """Run the localhost service in this terminal session (Ctrl+C to stop).
+
+        A foreground instance is owned by the interactive session: it is not
+        registered in the detached-service ledger, so ``status``/``stop`` keep
+        managing only detached instances and Ctrl+C is the shutdown control.
+        """
+        record = self._record()
+        if self._is_owned_running(record):
+            if open_browser:
+                self._open_browser()
+            print(f"Ticket Autopilot is already running at {self.url}")
+            return 0
+        if record is not None:
+            # A stale or unverifiable ledger is never permission to signal its PID.
+            self._remove_record()
+        if not self._port_is_available():
+            print(f"Cannot start Ticket Autopilot: {HOST}:{self.port} is in use by another process.", file=sys.stderr)
+            return 1
+        self._prepare_log()
+        if open_browser:
+            self._open_browser()
+        print(f"Ticket Autopilot is running at {self.url} — press Ctrl+C to stop")
+        try:
+            serve(port=self.port, service_id=secrets.token_urlsafe(32),
+                  home=self.home, project_root=self.project_root)
+        except KeyboardInterrupt:
+            pass
+        print("Ticket Autopilot stopped")
+        return 0
+
     def _record(self) -> dict[str, Any] | None:
         record = _read_json(self.service_path)
         if record is not None:
@@ -487,7 +518,10 @@ def _process_command(pid: int) -> str | None:
     except OSError:
         pass
     try:
-        completed = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, check=False)
+        # -ww removes any width limit so a long command line (for example a
+        # --service-id value beginning with "-") is never truncated out of
+        # the ownership match below.
+        completed = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", "command="], capture_output=True, text=True, check=False)
         return completed.stdout.strip() if completed.returncode == 0 else None
     except OSError:
         return None
@@ -1118,20 +1152,21 @@ class SettingsHandler(BaseHTTPRequestHandler):
         return
 
 
-def serve(*, port: int, service_id: str, home: str | Path | None = None) -> None:
+def serve(*, port: int, service_id: str, home: str | Path | None = None,
+          project_root: str | Path | None = None) -> None:
     """Run the localhost-only HTTP server in the foreground."""
     server = ThreadingHTTPServer((HOST, port), SettingsHandler)
     catalog = AgentCatalog()
     server.agent_catalog = catalog  # type: ignore[attr-defined]
     server.settings = LocalConfig(home, agent_profile_validator=catalog.validate_profile)  # type: ignore[attr-defined]
     server.service_id = service_id  # type: ignore[attr-defined]
-    server.project_root = Path(os.environ.get("TICKET_AUTOPILOT_PROJECT_ROOT") or Path.cwd()).resolve()  # type: ignore[attr-defined]
+    server.project_root = Path(project_root or os.environ.get("TICKET_AUTOPILOT_PROJECT_ROOT") or Path.cwd()).resolve()  # type: ignore[attr-defined]
     server.serve_forever(poll_interval=0.2)
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="start-ticket-autopilot")
-    parser.add_argument("command", nargs="?", choices=("start", "status", "stop", "restart", "server"), default="start")
+    parser.add_argument("command", nargs="?", choices=("start", "status", "stop", "restart", "server", "foreground"), default="start")
     parser.add_argument("--port", type=int, default=PORT, help=argparse.SUPPRESS)
     parser.add_argument("--service-id", help=argparse.SUPPRESS)
     parser.add_argument("--home", help=argparse.SUPPRESS)
@@ -1149,9 +1184,11 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         serve(port=args.port, service_id=args.service_id, home=args.home)
         return 0
-    manager = ServiceManager(port=args.port)
+    manager = ServiceManager(port=args.port, home=args.home)
     if args.command == "start":
         return manager.start()
+    if args.command == "foreground":
+        return manager.serve_foreground()
     if args.command == "status":
         return manager.status()
     if args.command == "stop":
