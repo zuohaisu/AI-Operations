@@ -562,7 +562,7 @@ class TicketBoard:
         try:
             prepared = resolver.prepare(
                 issue_key=item["identifier"], ticket_spec=detail["ticket_spec"],
-                source_issue=item, planner=self.planner,
+                source_issue=item, planner=self.planner, materialize_generated=True,
             )
         except PromptPreparationError as exc:
             return {"status": "BLOCKED_REQUIREMENTS", "reason": str(exc), "developer_calls": 0, "qa_calls": 0}
