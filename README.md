@@ -8,7 +8,7 @@ Ticket Autopilot 是一个供单人本机使用的 **Plane-first Web 控制器**
 
 1. 在浏览器中保存本机的 Plane、仓库与三类 Agent CLI 配置。
 2. 读取配置 Project 中的未完成 Plane Ticket，并用结构化 ticket contract 判定是否可运行。
-3. 使用 `tasks/AIO-NNN-dev-prompt.md` 与 `tasks/AIO-NNN-acceptance-prompt.md`；缺任一 Prompt 时调用 Planner 生成仅属于该 Run 的版本。
+3. 使用 `tasks/AIO-NNN-dev-prompt.md` 与 `tasks/AIO-NNN-acceptance-prompt.md`；普通 Run 缺 Prompt 时调用 Planner 生成仅属于该 Run 的版本，人类主动点击 **Prepare prompts only** 时则安全写入 `tasks/` 供查看、编辑和后续 Run 复用。
 4. 创建一个 owned Worktree 与 feature branch，后台按 Developer → deterministic checks → 独立 QA 运行。
 5. QA FAIL 时只把原始 findings 交回 Developer；QA 总数最多五轮。QA PASS 后 Controller 才会提交 ticket-owned changed files。
 6. 在页面查看 append-only Timeline、Prompt 来源、findings、checks、changed files、worktree、Commit SHA 和 Hard Break。

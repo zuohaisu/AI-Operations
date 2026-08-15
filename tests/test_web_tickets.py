@@ -137,6 +137,41 @@ def test_single_run_action_prepares_missing_prompts_before_agents(tmp_path: Path
     assert loop_calls[0][1].startswith("立即执行")
     assert loop_calls[0][2].startswith("立即执行")
     assert loop_calls[0][3]["dev"]["source"] == "planner_generated"
+    assert not (tmp_path / "tasks" / "AIO-018-dev-prompt.md").exists()
+    assert not (tmp_path / "tasks" / "AIO-018-acceptance-prompt.md").exists()
+
+
+def test_explicit_prepare_saves_prompts_that_the_next_run_reuses(tmp_path: Path):
+    planner_calls = []
+    loop_calls = []
+
+    def planner(**kwargs):
+        planner_calls.append(kwargs)
+        return {
+            "dev": "立即执行: Developer handles AIO-18 in zuohaisu/AI-Operations with Diff attribution, dirty-tree discipline, and a visual gate.",
+            "acceptance": "立即执行: independent QA handles AIO-18 in zuohaisu/AI-Operations with Diff attribution, dirty-tree discipline, and a visual gate.",
+        }
+
+    class FakeLoop:
+        def start(self, ticket_spec, *, developer_prompt, qa_prompt, prompt_sources):
+            loop_calls.append((developer_prompt, qa_prompt, prompt_sources))
+            return {"status": "ACTIVE", "run_id": "aio-18-reused"}
+
+    service = board(tmp_path, planner=planner)
+    service.web_loop_factory = lambda **_kwargs: FakeLoop()
+    started = plane.normalize_work_item(raw())
+    with mock.patch("ticket_autopilot.web.plane.fetch_issue", return_value=started):
+        prepared = service.prepare(started["id"])
+        result = service.run(started["id"])
+
+    assert prepared["status"] == "READY"
+    assert prepared["prompts"]["dev"]["canonical_path"] == "tasks/AIO-018-dev-prompt.md"
+    assert prepared["prompts"]["acceptance"]["canonical_path"] == "tasks/AIO-018-acceptance-prompt.md"
+    assert len(planner_calls) == 1
+    assert result == {"status": "ACTIVE", "run_id": "aio-18-reused"}
+    assert loop_calls[0][2]["dev"] == {
+        "source": "existing_file", "canonical_path": "tasks/AIO-018-dev-prompt.md",
+    }
 
 
 def test_invalid_v2_semantics_are_not_listed_or_sent_to_planner(tmp_path: Path):

@@ -123,6 +123,55 @@ def test_planner_generates_both_prompts_only_in_owned_artifact(tmp_path: Path):
         assert (artifact / f"{role}-prompt.md").read_text(encoding="utf-8").startswith("立即执行")
 
 
+def test_explicit_prepare_materializes_generated_prompts_without_overwriting(tmp_path: Path):
+    service = resolver(tmp_path)
+    paths = service.canonical_paths("AIO-18")
+
+    result = service.prepare(
+        issue_key="AIO-18",
+        ticket_spec=SPEC,
+        source_issue=ISSUE,
+        planner=lambda **_kwargs: {"dev": generated("dev"), "acceptance": generated("acceptance")},
+        materialize_generated=True,
+    )
+
+    assert result["status"] == "READY"
+    artifact = tmp_path / result["artifact_dir"]
+    for role in ("dev", "acceptance"):
+        assert paths[role].read_text(encoding="utf-8") == generated(role)
+        assert paths[role].read_bytes() == (artifact / f"{role}-prompt.md").read_bytes()
+        assert result["prompts"][role]["source"] == "planner_generated"
+        assert result["prompts"][role]["canonical_path"] == str(paths[role].relative_to(tmp_path))
+
+
+def test_explicit_prepare_rolls_back_if_a_canonical_prompt_appears(tmp_path: Path, monkeypatch):
+    service = resolver(tmp_path)
+    paths = service.canonical_paths("AIO-18")
+    real_link = os.link
+    links = 0
+
+    def racing_link(source, destination):
+        nonlocal links
+        links += 1
+        if links == 2:
+            Path(destination).write_text("human-created\n", encoding="utf-8")
+        return real_link(source, destination)
+
+    monkeypatch.setattr(prompt_resolver_module.os, "link", racing_link)
+    result = service.prepare(
+        issue_key="AIO-18",
+        ticket_spec=SPEC,
+        source_issue=ISSUE,
+        planner=lambda **_kwargs: {"dev": generated("dev"), "acceptance": generated("acceptance")},
+        materialize_generated=True,
+    )
+
+    assert result["status"] == "HARD_BREAK_PLANNER"
+    assert "no existing file was overwritten" in result["hard_break_reason"]
+    assert not paths["dev"].exists()
+    assert paths["acceptance"].read_text(encoding="utf-8") == "human-created\n"
+
+
 def test_planner_failure_or_missing_role_is_hard_break(tmp_path: Path):
     service = resolver(tmp_path)
     result = service.prepare(issue_key="AIO-18", ticket_spec=SPEC, source_issue=ISSUE,

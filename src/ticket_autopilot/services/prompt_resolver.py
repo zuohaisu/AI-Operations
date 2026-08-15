@@ -1,9 +1,10 @@
 """Deterministic Prompt reuse and bounded Planner preparation for AIO-18.
 
 This module never starts Developer or QA.  Existing canonical task Prompts are
-copied byte-for-byte.  Planner-generated Prompts stay inside the owned
+copied byte-for-byte.  Planner-generated Prompts normally stay inside the owned
 preparation artifact so a Web Run never dirties the source checkout merely by
-preparing itself.
+preparing itself.  An explicit, human-requested Prepare may additionally
+materialize generated Prompts in ``tasks/`` for inspection and later reuse.
 
 Planner output receives one bounded repair attempt when it is structurally
 invalid.  The second request includes only the deterministic validation error;
@@ -108,8 +109,9 @@ class PromptResolver:
         source_issue: dict[str, Any],
         planner: Callable[..., dict[str, str]] | None,
         process_observer: Callable[[str, object], None] | None = None,
+        materialize_generated: bool = False,
     ) -> dict[str, Any]:
-        """Copy existing Prompts and prepare missing roles with bounded repair."""
+        """Prepare Prompts, optionally materializing generated roles in ``tasks/``."""
         if self.has_active_run():
             raise PromptPreparationError("an owned Run is already active")
         paths = self.canonical_paths(issue_key)
@@ -189,12 +191,23 @@ class PromptResolver:
                 destination = artifact_dir / f"{role}-prompt.md"
                 if role in existing:
                     destination.write_bytes(existing[role].read_bytes())
+                else:
+                    destination.write_text(generated[role], encoding="utf-8")
+
+            if materialize_generated and generated:
+                self._materialize_generated(paths, generated)
+
+            for role in _ROLES:
+                destination = artifact_dir / f"{role}-prompt.md"
+                if role in existing:
                     source = "existing_file"
                     canonical = str(existing[role].relative_to(self.repository))
                 else:
-                    destination.write_text(generated[role], encoding="utf-8")
                     source = "planner_generated"
-                    canonical = None
+                    canonical = (
+                        str(paths[role].relative_to(self.repository))
+                        if materialize_generated else None
+                    )
                 metadata["prompts"][role] = {
                     "source": source, "canonical_path": canonical,
                     "artifact_path": str(destination.relative_to(self.repository)),
@@ -215,6 +228,43 @@ class PromptResolver:
                 metadata["planner_profile"] = {key: str(value) for key, value in profile.items()}
         self._write_json(artifact_dir / "prompt-metadata.json", metadata)
         return {**metadata, "artifact_dir": str(artifact_dir.relative_to(self.repository))}
+
+    def _materialize_generated(self, paths: dict[str, Path], generated: dict[str, str]) -> None:
+        """Create generated canonical files atomically, without overwriting user work."""
+        self.tasks.mkdir(parents=True, exist_ok=True)
+        temporary: dict[str, Path] = {}
+        created: list[Path] = []
+        try:
+            for role, content in generated.items():
+                destination = paths[role]
+                temp = self.tasks / f".{destination.name}.{secrets.token_hex(6)}.tmp"
+                with temp.open("x", encoding="utf-8") as handle:
+                    handle.write(content)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                temporary[role] = temp
+
+            for role in generated:
+                destination = paths[role]
+                try:
+                    # The hard link publishes the complete file in one step and
+                    # fails instead of replacing a file created concurrently.
+                    os.link(temporary[role], destination)
+                except FileExistsError as exc:
+                    raise PromptPreparationError(
+                        f"canonical Prompt appeared while preparing: {destination.relative_to(self.repository)}; "
+                        "no existing file was overwritten"
+                    ) from exc
+                created.append(destination)
+        except Exception as exc:
+            for path in created:
+                path.unlink(missing_ok=True)
+            if isinstance(exc, PromptPreparationError):
+                raise
+            raise PromptPreparationError(f"could not materialize generated Prompts: {exc}") from exc
+        finally:
+            for path in temporary.values():
+                path.unlink(missing_ok=True)
 
     @staticmethod
     def _preparing_is_orphaned(metadata_path: Path, metadata: dict[str, Any]) -> bool:
